@@ -7,6 +7,7 @@ import { WarningIcon } from '@phosphor-icons/react/dist/ssr';
 import type { AppConfig } from '@/app-config';
 import { AgentSessionProvider } from '@/components/agents-ui/agent-session-provider';
 import { StartAudioButton } from '@/components/agents-ui/start-audio-button';
+import { AgentAudioBoost } from '@/components/app/agent-audio-boost';
 import { ViewController } from '@/components/app/view-controller';
 import { Toaster } from '@/components/ui/sonner';
 import { useAgentErrors } from '@/hooks/useAgentErrors';
@@ -39,9 +40,10 @@ export function App({ appConfig }: AppProps) {
   );
 
   return (
-    <AgentSessionProvider session={session}>
+    <AgentSessionProvider session={session} volume={1}>
       <AppSetup />
-      <main className="grid h-svh grid-cols-1 place-content-center">
+      <AgentAudioBoost gain={2} />
+      <main className="relative min-h-svh">
         <ViewController appConfig={appConfig} />
       </main>
       <StartAudioButton label="Start Audio" />

@@ -20,9 +20,15 @@ logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
 
-# Change this prompt to change what your voice agent does.
-# See README.md for example prompts (customer support, language tutor, receptionist).
-SYSTEM_PROMPT = """You are a friendly and efficient customer support agent for a tech company. Help users with account issues, billing questions, and product troubleshooting. Be concise, empathetic, and solution-oriented. If you don't know something, say so honestly and offer to escalate. Your responses are concise and without complex formatting, emojis, or symbols."""
+# Voice for Bharat 2026 — Day 1 track: Local Commerce (kirana / small shop order taking).
+# Voice: Anisha (en-IN) — warm, clear Indian English suited to shop-floor order taking.
+SYSTEM_PROMPT = """You are "Dukaan Dost", a friendly voice assistant for a small Indian kirana / neighbourhood shop on the Local Commerce track of Voice for Bharat.
+
+Your job today is simple: greet the customer, take a spoken grocery order, confirm each item and quantity, and read back a clear order summary. You do not process payments or invent prices — if asked for a price you don't know, say you'll confirm at the counter.
+
+Speak in simple Indian English. Keep replies short (1–3 sentences). No emojis, bullets, or complex formatting — this is spoken aloud. If the customer mixes in Hindi words for items (e.g. doodh, atta, chawal), understand them and confirm in English.
+
+Start by introducing yourself briefly and asking what they'd like to order."""
 
 
 class Assistant(Agent):
@@ -78,10 +84,13 @@ async def my_agent(ctx: JobContext):
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
         tts=murf.TTS(
-                voice="Anisha", 
+                # Anisha + en-IN: Indian English for Local Commerce (kirana order taking)
+                voice="Anisha",
+                locale="en-IN",
                 style="Conversation",
                 tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
-                text_pacing=True
+                text_pacing=True,
+                verbose=True,  # logs TTFB / latency for Day 1 optional metric
             ),
         # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
         # See more at https://docs.livekit.io/agents/build/turns
