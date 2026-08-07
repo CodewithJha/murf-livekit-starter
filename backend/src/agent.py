@@ -1,4 +1,5 @@
 import logging
+import re
 
 from dotenv import load_dotenv
 from livekit import rtc
@@ -6,10 +7,11 @@ from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
+    ChatContext,
+    ChatMessage,
     JobContext,
     JobProcess,
     cli,
-    inference,
     tokenize,
     room_io,
 )
@@ -20,37 +22,176 @@ logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
 
-# Voice for Bharat 2026 — Day 1 track: Local Commerce (kirana / small shop order taking).
-# Voice: Anisha (en-IN) — warm, clear Indian English suited to shop-floor order taking.
-SYSTEM_PROMPT = """You are "Dukaan Dost", a friendly voice assistant for a small Indian kirana / neighbourhood shop on the Local Commerce track of Voice for Bharat.
+# Voice for Bharat 2026 — Day 2 track: Local Commerce (kirana order taking).
+# Voice: Anisha — en-IN by default; switches to hi-IN when the user speaks Hindi/Hinglish.
+SYSTEM_PROMPT = """
+IDENTITY
+You are Dukaan Dost, the voice order assistant for a small Indian kirana / neighbourhood shop.
+You work for the shopkeeper. You take spoken grocery orders over a call. You are not the shopkeeper, a payment app, a doctor, or a lawyer.
 
-Your job today is simple: greet the customer, take a spoken grocery order, confirm each item and quantity, and read back a clear order summary. You do not process payments or invent prices — if asked for a price you don't know, say you'll confirm at the counter.
+OBJECTIVES
+A successful call achieves all of these:
+1. Take a clear spoken grocery order — item names and quantities from the customer.
+2. Confirm each item and quantity back, then read a short order summary before ending.
+3. Tell the customer that the shopkeeper must still confirm final price, stock, and delivery — you never finalize those yourself.
 
-Speak in simple Indian English. Keep replies short (1–3 sentences). No emojis, bullets, or complex formatting — this is spoken aloud. If the customer mixes in Hindi words for items (e.g. doodh, atta, chawal), understand them and confirm in English.
+KNOWLEDGE
+You know common kirana items and Hindi/English names for them (doodh, atta, chawal, tel, sabzi, and similar).
+You do not know live stock, exact prices, offers, or delivery slots unless the shopkeeper has already told you in this call.
+You do not process payments, collect OTPs, or place confirmed orders in any system.
+If you are unsure about an item name, ask one short clarifying question.
 
-Start by introducing yourself briefly and asking what they'd like to order."""
+LANGUAGE
+Default language is simple Indian English for the greeting, unless the customer's first words are clearly Hindi or Hinglish.
+
+Match the customer's latest turn every time. Language can change mid-call:
+- Latest turn mostly English → reply in simple Indian English.
+- Latest turn mostly Hindi → reply in simple spoken romanized Hindi (e.g. "Ji, ek kilo doodh note kar liya").
+- Latest turn Hinglish mix → reply in the same mix.
+- Hindi item words inside an English sentence (e.g. "one kilo doodh") → keep answering in English.
+
+Do not stay stuck in English after they switch to Hindi. Do not stay stuck in Hindi after they switch back to English.
+Do not greet in Hindi when they opened with English hello/hi.
+When a system note says which language to use for this turn, follow that note exactly.
+Keep formality warm and polite. Use "ji" / "aap" when they are in Hindi or Hinglish.
+
+GUARDRAILS
+Refuse:
+- Taking or confirming payments, UPI, card numbers, OTPs, PINs, or account details.
+- Inventing stock availability, prices, discounts, or delivery dates the shopkeeper has not set in this call.
+- Medical, legal, financial, or government-scheme advice.
+- Anything illegal, harmful, or unrelated to grocery order-taking for this shop.
+
+Never claim:
+- That an order is confirmed, booked, or placed.
+- A final price, bill total, or delivery date/time the seller has not set.
+- That an item is definitely in stock when you have not been told.
+
+Escalation script (use when something needs the shopkeeper):
+Match their current language. English: "I'll note this for the seller to confirm." Then briefly say what you noted, and offer to keep taking other items.
+If they push for a price or delivery promise (English): "I can't confirm price or delivery — the shopkeeper will set that. I'll note your request for them."
+Hinglish/Hindi equivalent when they are speaking that way, e.g. "Price ya delivery confirm nahi kar sakta — shopkeeper bataayenge. Main note kar leta hoon."
+
+STYLE
+This is spoken aloud. Keep every reply short — usually one or two sentences, rarely three. No bullets, lists, brackets, emojis, or markdown.
+Aim for sentences under about twenty words. Confirm items one at a time when the order is long.
+If the customer goes quiet after you ask something, gently re-prompt once in their current language. After a second silence, close politely.
+
+FIRST TURN
+Greet in Indian English by default.
+Say you are Dukaan Dost for the kirana shop, that you can take their grocery order by voice, and ask what they would like.
+English example: "Hi, I'm Dukaan Dost, your kirana shop's voice assistant. Tell me what you'd like to order today."
+If their very first words are clearly Hindi/Hinglish, greet in that mix instead. After the greeting, always follow their latest turn's language.
+"""
+
+
+_HINDI_MARKERS = (
+    "namaste",
+    "namaskar",
+    "haan",
+    "han",
+    "nahi",
+    "nahin",
+    "chahiye",
+    "dijiye",
+    "diijiye",
+    "dena",
+    "bhai",
+    "bhaiya",
+    "mujhe",
+    "mera",
+    "meri",
+    "aap",
+    "aapko",
+    "kitna",
+    "kitne",
+    "kya",
+    "hai",
+    "hoon",
+    "hain",
+    "theek",
+    "accha",
+    "acha",
+    "bilkul",
+    "sunao",
+    "bolo",
+    "yeh",
+    "woh",
+    "doodh",
+    "chawal",
+    "sabzi",
+    "atta",
+    "ji",
+)
+
+
+def _reply_locale_for_text(text: str) -> str:
+    """Pick Murf locale from the user's latest utterance."""
+    raw = (text or "").strip()
+    if not raw:
+        return "en-IN"
+
+    if any("\u0900" <= ch <= "\u097F" for ch in raw):
+        return "hi-IN"
+
+    lower = raw.lower()
+    if lower in {
+        "hello",
+        "hi",
+        "hey",
+        "hello.",
+        "hi.",
+        "hey.",
+        "good morning",
+        "good evening",
+    }:
+        return "en-IN"
+
+    words = [re.sub(r"[^\w]+", "", w) for w in lower.split()]
+    words = [w for w in words if w]
+    hits = sum(1 for w in words if w in _HINDI_MARKERS)
+    phrase_hits = sum(1 for m in _HINDI_MARKERS if len(m) > 2 and m in lower)
+
+    if hits >= 2 or phrase_hits >= 2:
+        return "hi-IN"
+    if hits >= 1 and len(words) <= 10:
+        return "hi-IN"
+    return "en-IN"
 
 
 class Assistant(Agent):
     def __init__(self) -> None:
         super().__init__(instructions=SYSTEM_PROMPT)
 
-    # To add tools, use the @function_tool decorator.
-    # Here's an example that adds a simple weather tool.
-    # You also have to add `from livekit.agents import function_tool, RunContext` to the top of this file
-    # @function_tool
-    # async def lookup_weather(self, context: RunContext, location: str):
-    #     """Use this tool to look up current weather information in the given location.
-    #
-    #     If the location is not supported by the weather service, the tool will indicate this. You must tell the user the location's weather is unavailable.
-    #
-    #     Args:
-    #         location: The location to look up weather information for (e.g. city name)
-    #     """
-    #
-    #     logger.info(f"Looking up weather for {location}")
-    #
-    #     return "sunny with a temperature of 70 degrees."
+    async def on_user_turn_completed(
+        self, turn_ctx: ChatContext, new_message: ChatMessage
+    ) -> None:
+        text = new_message.text_content or ""
+        locale = _reply_locale_for_text(text)
+
+        tts = getattr(self.session, "tts", None)
+        if tts is not None and hasattr(tts, "update_options"):
+            tts.update_options(locale=locale)
+            logger.info(
+                "Switched Murf locale to %s for user text: %r", locale, text[:80]
+            )
+
+        if locale == "hi-IN":
+            turn_ctx.add_message(
+                role="system",
+                content=(
+                    "Language for this reply: Hindi/Hinglish. Answer in simple spoken "
+                    "romanized Hindi matching the customer. Do not answer in English only."
+                ),
+            )
+        else:
+            turn_ctx.add_message(
+                role="system",
+                content=(
+                    "Language for this reply: Indian English. Answer in simple Indian "
+                    "English. Do not switch to Hindi unless the customer used Hindi."
+                ),
+            )
 
 
 server = AgentServer()
@@ -65,61 +206,28 @@ server.setup_fnc = prewarm
 
 @server.rtc_session(agent_name="my-agent")
 async def my_agent(ctx: JobContext):
-    # Logging setup
-    # Add any other context you want in all log entries here
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
 
-    # Set up a voice AI pipeline using Murf Falcon, Gemini, Deepgram, and the LiveKit turn detector
     session = AgentSession(
-        # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
-        # See all available models at https://docs.livekit.io/agents/models/stt/
-        stt=deepgram.STT(model="nova-3"),
-        # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
-        # See all available models at https://docs.livekit.io/agents/models/llm/
+        stt=deepgram.STT(model="nova-3", language="multi"),
         llm=google.LLM(
-                model="gemini-3.5-flash-lite",
-            ),
-        # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
-        # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
+            model="gemini-3.5-flash-lite",
+        ),
         tts=murf.TTS(
-                # Anisha + en-IN: Indian English for Local Commerce (kirana order taking)
-                voice="Anisha",
-                locale="en-IN",
-                style="Conversation",
-                tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
-                text_pacing=True,
-                verbose=True,  # logs TTFB / latency for Day 1 optional metric
-            ),
-        # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
-        # See more at https://docs.livekit.io/agents/build/turns
+            voice="Anisha",
+            locale="en-IN",
+            style="Conversation",
+            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
+            text_pacing=True,
+            verbose=True,
+        ),
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
-        # allow the LLM to generate a response while waiting for the end of turn
-        # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,
     )
 
-    # To use a realtime model instead of a voice pipeline, use the following session setup instead.
-    # (Note: This is for the OpenAI Realtime API. For other providers, see https://docs.livekit.io/agents/models/realtime/))
-    # 1. Install livekit-agents[openai]
-    # 2. Set OPENAI_API_KEY in .env.local
-    # 3. Add `from livekit.plugins import openai` to the top of this file
-    # 4. Use the following session setup instead of the version above
-    # session = AgentSession(
-    #     llm=openai.realtime.RealtimeModel(voice="marin")
-    # )
-
-    # # Add a virtual avatar to the session, if desired
-    # # For other providers, see https://docs.livekit.io/agents/models/avatar/
-    # avatar = hedra.AvatarSession(
-    #   avatar_id="...",  # See https://docs.livekit.io/agents/models/avatar/plugins/hedra
-    # )
-    # # Start the avatar and wait for it to join
-    # await avatar.start(session, room=ctx.room)
-
-    # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(
         agent=Assistant(),
         room=ctx.room,
@@ -135,7 +243,6 @@ async def my_agent(ctx: JobContext):
         ),
     )
 
-    # Join the room and connect to the user
     await ctx.connect()
 
 

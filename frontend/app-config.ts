@@ -36,7 +36,7 @@ export const APP_CONFIG_DEFAULTS: AppConfig = {
   companyName: 'Dukaan Dost',
   pageTitle: 'Dukaan Dost — Local Commerce Voice Agent',
   pageDescription:
-    'Voice order-taking for Indian kirana shops — #VoiceForBharat, powered by Murf Falcon',
+    'Dukaan Dost takes kirana orders by voice. Seller confirms price & delivery — #VoiceForBharat, Murf Falcon',
 
   supportsChatInput: true,
   supportsVideoInput: true,

@@ -53,7 +53,7 @@ export function ViewController({ appConfig }: ViewControllerProps) {
         <MotionSessionView
           key="session-view"
           {...VIEW_MOTION_PROPS}
-          preConnectMessage="Listening… tell us what you need"
+          preConnectMessage="Listening… tell me your order"
           supportsChatInput={appConfig.supportsChatInput}
           supportsVideoInput={appConfig.supportsVideoInput}
           supportsScreenShare={appConfig.supportsScreenShare}

@@ -45,7 +45,7 @@ export const WelcomeView = ({
           </h1>
 
           <p className="mt-4 max-w-[32ch] text-[15px] leading-relaxed text-[#878787]">
-            Speak what you need. We confirm each item — fast and clear.
+            Speak your order. We confirm items — the seller sets the price.
           </p>
 
           <Button
