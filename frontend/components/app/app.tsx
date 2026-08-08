@@ -43,7 +43,7 @@ export function App({ appConfig }: AppProps) {
     <AgentSessionProvider session={session} volume={1}>
       <AppSetup />
       <AgentAudioBoost gain={2} />
-      <main className="relative min-h-svh">
+      <main className="relative h-svh overflow-hidden">
         <ViewController appConfig={appConfig} />
       </main>
       <StartAudioButton label="Start Audio" />

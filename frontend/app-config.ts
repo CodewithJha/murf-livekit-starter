@@ -34,25 +34,25 @@ export interface AppConfig {
 
 export const APP_CONFIG_DEFAULTS: AppConfig = {
   companyName: 'Dukaan Dost',
-  pageTitle: 'Dukaan Dost — Local Commerce Voice Agent',
+  pageTitle: 'Dukaan Dost — Voice-first Local Commerce',
   pageDescription:
-    'Dukaan Dost takes kirana orders by voice. Seller confirms price & delivery — #VoiceForBharat, Murf Falcon',
+    'Talk to nearby shops naturally. Dukaan Dost takes kirana orders by voice — #VoiceForBharat, Murf Falcon',
 
   supportsChatInput: true,
-  supportsVideoInput: true,
-  supportsScreenShare: true,
+  supportsVideoInput: false,
+  supportsScreenShare: false,
   isPreConnectBufferEnabled: true,
 
   logo: '',
-  accent: '#2874F0',
+  accent: '#B87444',
   logoDark: '',
-  accentDark: '#5B9AFF',
-  startButtonText: 'Start talking',
+  accentDark: '#C98A5C',
+  startButtonText: 'Start call',
 
   audioVisualizerType: 'bar',
-  audioVisualizerColor: '#2874F0',
-  audioVisualizerColorDark: '#5B9AFF',
-  audioVisualizerBarCount: 5,
+  audioVisualizerColor: '#A86A3D',
+  audioVisualizerColorDark: '#C48A57',
+  audioVisualizerBarCount: 7,
 
   // agent dispatch configuration
   agentName: process.env.AGENT_NAME ?? undefined,

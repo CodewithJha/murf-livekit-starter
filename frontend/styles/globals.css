@@ -5,80 +5,57 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
-  Flipkart-inspired: blue + yellow, white ground, minimal chrome. No catalog clutter.
+  Dukaan Dost — WhatsApp Desktop-style voice workspace
 */
 
 :root {
-  --radius: 0.5rem;
-  --background: #f1f3f6;
-  --foreground: #212121;
-  --card: #ffffff;
-  --card-foreground: #212121;
-  --popover: #ffffff;
-  --popover-foreground: #212121;
-  --primary: #2874f0;
-  --primary-foreground: #ffffff;
-  --secondary: #ffffff;
-  --secondary-foreground: #212121;
-  --muted: #e8ebef;
-  --muted-foreground: #878787;
-  --accent: #ffe500;
-  --accent-foreground: #212121;
-  --destructive: #e53935;
-  --border: #e0e0e0;
-  --input: #e0e0e0;
-  --ring: #2874f0;
-  --chart-1: #2874f0;
-  --chart-2: #ffe500;
-  --chart-3: #26a541;
-  --chart-4: #fb641b;
-  --chart-5: #878787;
-  --sidebar: #ffffff;
-  --sidebar-foreground: #212121;
-  --sidebar-primary: #2874f0;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #f1f3f6;
-  --sidebar-accent-foreground: #212121;
-  --sidebar-border: #e0e0e0;
-  --sidebar-ring: #2874f0;
-}
+  --radius: 1rem;
 
-.dark {
-  --background: #121212;
-  --foreground: #f5f5f5;
-  --card: #1e1e1e;
-  --card-foreground: #f5f5f5;
-  --popover: #1e1e1e;
-  --popover-foreground: #f5f5f5;
-  --primary: #5b9aff;
-  --primary-foreground: #0a0a0a;
-  --secondary: #2a2a2a;
-  --secondary-foreground: #f5f5f5;
-  --muted: #2a2a2a;
-  --muted-foreground: #a0a0a0;
-  --accent: #3d3500;
-  --accent-foreground: #ffe500;
-  --destructive: #ef5350;
-  --border: #333333;
-  --input: #333333;
-  --ring: #5b9aff;
-  --sidebar: #1e1e1e;
-  --sidebar-foreground: #f5f5f5;
-  --sidebar-primary: #5b9aff;
-  --sidebar-primary-foreground: #0a0a0a;
-  --sidebar-accent: #2a2a2a;
-  --sidebar-accent-foreground: #f5f5f5;
-  --sidebar-border: #333333;
-  --sidebar-ring: #5b9aff;
+  --dd-bg: #faf7f2;
+  --dd-card: #ffffff;
+  --dd-accent: #b87444;
+  --dd-accent-hover: #c98a5c;
+  --dd-border: #e9dfd3;
+  --dd-ink: #2a241f;
+  --dd-muted: #7c736c;
+  --dd-success: #4c8c4a;
+
+  --background: #faf7f2;
+  --foreground: #2a241f;
+  --card: #ffffff;
+  --card-foreground: #2a241f;
+  --popover: #ffffff;
+  --popover-foreground: #2a241f;
+  --primary: #b87444;
+  --primary-foreground: #ffffff;
+  --secondary: #f3eee6;
+  --secondary-foreground: #2a241f;
+  --muted: #f3eee6;
+  --muted-foreground: #7c736c;
+  --accent: #f6f2eb;
+  --accent-foreground: #2a241f;
+  --destructive: #b42318;
+  --border: #e9dfd3;
+  --input: #e9dfd3;
+  --ring: #b87444;
+  --chart-1: #b87444;
+  --chart-2: #4c8c4a;
+  --chart-3: #7c736c;
+  --chart-4: #c98a5c;
+  --chart-5: #e9dfd3;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #2a241f;
+  --sidebar-primary: #b87444;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #faf7f2;
+  --sidebar-accent-foreground: #2a241f;
+  --sidebar-border: #e9dfd3;
+  --sidebar-ring: #b87444;
 }
 
 @theme inline {
-  --font-sans:
-    var(--font-work-sans), ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji',
-    'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
-  --font-mono:
-    var(--font-commit-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-    'Liberation Mono', 'Courier New', monospace;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -111,13 +88,162 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+
+  --color-dd-bg: var(--dd-bg);
+  --color-dd-card: var(--dd-card);
+  --color-dd-accent: var(--dd-accent);
+  --color-dd-accent-hover: var(--dd-accent-hover);
+  --color-dd-border: var(--dd-border);
+  --color-dd-ink: var(--dd-ink);
+  --color-dd-muted: var(--dd-muted);
+  --color-dd-success: var(--dd-success);
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/40;
   }
+  html,
   body {
-    @apply bg-background text-foreground;
+    @apply bg-dd-bg text-dd-ink h-full overflow-hidden antialiased;
   }
+}
+
+@keyframes dd-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1.07);
+    opacity: 0.85;
+  }
+}
+
+@keyframes dd-orb-idle {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.015);
+  }
+}
+
+@keyframes dd-ripple {
+  0% {
+    transform: scale(0.88);
+    opacity: 0.4;
+  }
+  100% {
+    transform: scale(1.4);
+    opacity: 0;
+  }
+}
+
+.dd-orb-breathe {
+  animation: dd-breathe 4.2s ease-in-out infinite;
+}
+
+.dd-orb-idle {
+  animation: dd-orb-idle 5.2s ease-in-out infinite;
+}
+
+.dd-orb-ripple {
+  animation: dd-ripple 3s ease-out infinite;
+}
+
+/* Waveform — CSS transform (Safari-safe; Motion height anims fail on WebKit spans) */
+@keyframes dd-wave-idle {
+  0%,
+  100% {
+    transform: scaleY(0.92);
+    opacity: 0.28;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 0.36;
+  }
+}
+
+@keyframes dd-wave-active {
+  0%,
+  100% {
+    transform: scaleY(0.4);
+    opacity: 0.4;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+.dd-wave-bar {
+  transform-origin: center center;
+  will-change: transform, opacity;
+}
+
+.dd-wave-bar-idle {
+  animation: dd-wave-idle 4.8s ease-in-out infinite;
+  animation-delay: var(--dd-wave-delay, 0s);
+}
+
+.dd-wave-bar-active {
+  animation: dd-wave-active var(--dd-wave-duration, 1s) ease-in-out infinite;
+  animation-delay: var(--dd-wave-delay, 0s);
+}
+
+/* Do NOT disable voice UI motion for prefers-reduced-motion —
+   Safari users with Reduce Motion on would otherwise see a dead orb/waveform.
+   Animation is already soft and functional (speaking feedback). */
+
+@keyframes dd-orb-speak {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  25% {
+    transform: scale(1.05);
+  }
+  50% {
+    transform: scale(0.98);
+  }
+  75% {
+    transform: scale(1.03);
+  }
+}
+
+@keyframes dd-orb-listen {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.04);
+  }
+}
+
+@keyframes dd-orb-glow {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.75;
+    transform: scale(1.08);
+  }
+}
+
+.dd-orb-speak {
+  animation: dd-orb-speak 1.35s ease-in-out infinite;
+}
+
+.dd-orb-listen {
+  animation: dd-orb-listen 2.8s ease-in-out infinite;
+}
+
+.dd-orb-glow-active {
+  animation: dd-orb-glow 2.4s ease-in-out infinite;
 }
