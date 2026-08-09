@@ -1,5 +1,6 @@
 import logging
 import re
+from typing import Any
 
 from dotenv import load_dotenv
 from livekit import rtc
@@ -11,18 +12,25 @@ from livekit.agents import (
     ChatMessage,
     JobContext,
     JobProcess,
+    RunContext,
     cli,
-    tokenize,
+    function_tool,
     room_io,
+    tokenize,
 )
-from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
+from livekit.agents.llm.tool_context import ToolFlag
+from livekit.plugins import deepgram, google, murf, noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
+
+from memory_store import MemoryStore
 
 logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
 
-# Voice for Bharat 2026 — Local Commerce (kirana order taking).
+_memory_store = MemoryStore()
+
+# Voice for Bharat 2026 — Local Commerce (kirana order taking) + Day 4 memory.
 # Voice: Anisha — locale switches to hi-IN only for clear Hindi/Hinglish turns.
 SYSTEM_PROMPT = """
 IDENTITY
@@ -41,21 +49,35 @@ Example English replies:
 - "Noted: one kilo atta and two packets biscuits. Shall I add more?"
 - "Your list so far: two litres milk, one kilo tomatoes. Shopkeeper will confirm price and delivery."
 
-Example Hindi/Hinglish replies (only when customer spoke Hindi/Hinglish):
-- "Ji, do litre doodh note kar liya. Aur kuch chahiye?"
-- "Ek kilo atta aur do packet biscuit. Aur kuch?"
+Example Hindi replies (only when customer spoke Hindi/Hinglish) — Devanagari only:
+- "जी, दो लीटर दूध नोट कर लिया। और कुछ चाहिए?"
+- "एक किलो आटा और दो पैकेट बिस्किट। और कुछ?"
 
-Never reply with empty filler like only "Haan ji", "Okay ji", "Theek hai" without naming the item and quantity.
+Never reply with empty filler like only "Haan ji", "Okay ji", "Theek hai", "हाँ जी" without naming the item and quantity.
+
+MEMORY — use tools, never invent saved history
+You have two tools: lookup_caller and save_caller_memory.
+- After you greet (or as soon as the caller shares their name), call lookup_caller with their name.
+- If a profile is found: greet/welcome them by name, briefly continue from last time using their facts (past orders, usual quantities, preferred delivery slot), then take today's order.
+- If not found: treat them as a new customer, ask their name if still unknown, then take the order.
+- After you learn useful kirana facts (name, usual quantities, past/current order summary, preferred delivery slot), ASK before saving. Example: "Shall I remember this for next time?"
+- Call save_caller_memory only after a clear yes. Set caller_consented=true only then.
+- If they say no, do not save. You may call save_caller_memory with caller_consented=false, or simply skip saving.
+- Never claim you remembered something you did not save via the tool.
+- Do not call tools on the very first greeting turn before the user has spoken.
 
 KNOWLEDGE
-Common kirana items: milk/doodh, atta, rice/chawal, oil/tel, sugar/cheeni, tea/chai, biscuits, eggs/ande, onions/pyaz, tomatoes/tamatar, potatoes/aloo, and similar.
+Common kirana items: milk/दूध, atta/आटा, rice/चावल, oil/तेल, sugar/चीनी, tea/चाय, biscuits, eggs/अंडे, onions/प्याज, tomatoes/टमाटर, potatoes/आलू, and similar.
 If an item is unclear, ask one short clarifying question. Do not invent stock, prices, or delivery times.
 
-LANGUAGE — follow strictly
+LANGUAGE & SCRIPT — follow strictly
+Always write every language in its own native script.
+- Hindi → Devanagari (नमस्ते), never romanized (never "namaste", "doodh", "chahiye" in replies).
+- English → Latin script.
 Default: simple Indian English.
 Match ONLY the customer's latest turn:
 - Clear English (hi, hello, "two litres milk", "I want to order…") → reply in Indian English. Do NOT use Hindi.
-- Clear Hindi or Hinglish (namaste, mujhe chahiye, "ek kilo doodh dena") → reply in simple spoken romanized Hindi/Hinglish.
+- Clear Hindi or Hinglish (नमस्ते, "mujhe chahiye", "ek kilo doodh dena", or Devanagari) → reply in simple Hindi in Devanagari script.
 - Hindi item words inside an English sentence ("one kilo doodh") → stay in English and confirm the item.
 When a system note specifies the language for this turn, obey it exactly.
 Do not flip languages randomly. Do not greet in Hindi after an English "hi".
@@ -72,8 +94,11 @@ Spoken aloud. One or two short sentences. No bullets, markdown, or emojis.
 Always include the item name and quantity when acknowledging an order line.
 
 FIRST TURN
-Greet in Indian English unless their first words are clearly Hindi/Hinglish.
-"Hi, I'm Dukaan Dost for the kirana shop. Tell me what you'd like to order."
+Greet immediately as Dukaan Dost without waiting on tools.
+- New caller (English): "Hi, I'm Dukaan Dost for the kirana shop. May I have your name, and what would you like to order?"
+- New caller (Hindi): "नमस्ते, मैं दूकान दोस्त हूँ। आपका नाम बताइए और क्या ऑर्डर करना है?"
+As soon as you hear a name (or anytime you need saved facts), call lookup_caller with that name.
+If a profile is found after lookup: welcome them by name, mention one saved fact, then continue the order.
 """
 
 # Grocery keyterms boost Deepgram Nova-3 recognition (English + common romanized Hindi).
@@ -164,7 +189,7 @@ def _reply_locale_for_text(text: str) -> str:
         return "en-IN"
 
     # Devanagari script → Hindi
-    if any("\u0900" <= ch <= "\u097F" for ch in raw):
+    if any("\u0900" <= ch <= "\u097f" for ch in raw):
         return "hi-IN"
 
     lower = raw.lower().strip()
@@ -190,9 +215,42 @@ def _reply_locale_for_text(text: str) -> str:
     return "en-IN"
 
 
+def _session_identity(context: RunContext) -> str:
+    try:
+        userdata = context.userdata
+    except ValueError:
+        return ""
+    if isinstance(userdata, dict):
+        return str(userdata.get("livekit_identity") or "")
+    return ""
+
+
+def _set_active_user_id(context: RunContext, user_id: str) -> None:
+    try:
+        userdata = context.userdata
+    except ValueError:
+        return
+    if isinstance(userdata, dict):
+        userdata["active_user_id"] = user_id
+
+
 class Assistant(Agent):
-    def __init__(self) -> None:
+    def __init__(self, memory_store: MemoryStore | None = None) -> None:
         super().__init__(instructions=SYSTEM_PROMPT)
+        self._memory = memory_store or _memory_store
+
+    async def on_enter(self) -> None:
+        # Gemini rejects tool-call→reply on enter ("function call turn must follow
+        # user/function-response"). Greet without tools; lookup runs after the
+        # caller shares their name (still via function tools).
+        await self.session.generate_reply(
+            instructions=(
+                "Greet as Dukaan Dost for the kirana shop in one short spoken "
+                "sentence. Ask for their name and what they would like to order. "
+                "Do not call any tools on this turn."
+            ),
+            tool_choice="none",
+        )
 
     async def on_user_turn_completed(
         self, turn_ctx: ChatContext, new_message: ChatMessage
@@ -206,13 +264,16 @@ class Assistant(Agent):
             tts.update_options(locale=locale)
             logger.info("Reply locale %s for user text: %r", locale, text[:80])
 
+        # Prefer instruction hints over extra system turns — Gemini is strict about
+        # turn order when tools are in the chat history.
         if locale == "hi-IN":
             turn_ctx.add_message(
                 role="system",
                 content=(
-                    "Language for this reply: Hindi/Hinglish only. "
-                    "Confirm item name + quantity in romanized Hindi. "
-                    "Do not answer with empty filler like only 'haan ji'."
+                    "Language for this reply: Hindi in Devanagari script only "
+                    "(e.g. नमस्ते, दूध). Never romanize Hindi. "
+                    "Confirm item name + quantity. "
+                    "Do not answer with empty filler like only 'हाँ जी'."
                 ),
             )
         else:
@@ -226,8 +287,95 @@ class Assistant(Agent):
                 ),
             )
 
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    async def lookup_caller(
+        self,
+        context: RunContext,
+        name: str = "",
+    ) -> dict[str, Any]:
+        """Look up a returning caller in the shop memory database.
 
-server = AgentServer()
+        Call at the start of a conversation and again whenever the caller shares
+        their name. Facts come only from this tool — never invent memory.
+
+        Args:
+            name: Caller's name if known. Leave empty to try LiveKit identity only.
+        """
+        identity = _session_identity(context)
+        profile = None
+        if name and name.strip():
+            profile = self._memory.lookup_by_name(name.strip())
+        if profile is None and identity:
+            profile = self._memory.lookup_by_identity(identity)
+
+        if profile is None:
+            logger.info(
+                "lookup_caller: miss name=%r identity=%r", name, identity or None
+            )
+            return {
+                "found": False,
+                "message": "No saved caller profile. Treat them as a new customer.",
+            }
+
+        _set_active_user_id(context, profile.user_id)
+        logger.info("lookup_caller: hit user_id=%s", profile.user_id)
+        return {"found": True, **profile.to_dict()}
+
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    async def save_caller_memory(
+        self,
+        context: RunContext,
+        name: str,
+        language_preference: str,
+        past_orders: str,
+        usual_quantities: str,
+        preferred_delivery_slot: str,
+        caller_consented: bool,
+    ) -> dict[str, Any]:
+        """Save caller identity and kirana facts ONLY after explicit consent.
+
+        Ask first (e.g. "Shall I remember this for next time?"). Set
+        caller_consented=True only if they clearly agreed. If they refuse, set
+        caller_consented=False — nothing will be written.
+
+        Args:
+            name: Caller's name.
+            language_preference: Preferred reply locale, en-IN or hi-IN.
+            past_orders: Short summary of recent or current order items.
+            usual_quantities: Habitual quantities (e.g. always two litres milk).
+            preferred_delivery_slot: Preferred delivery window (e.g. evening 6-8).
+            caller_consented: True only after the caller explicitly agreed to save.
+        """
+        if not caller_consented:
+            logger.info("save_caller_memory: declined for name=%r", name)
+            return {
+                "saved": False,
+                "reason": "Caller declined or consent missing. Nothing was written.",
+            }
+
+        if not (name or "").strip():
+            return {
+                "saved": False,
+                "reason": "Name is required before saving.",
+            }
+
+        identity = _session_identity(context) or None
+        profile = self._memory.save(
+            name=name.strip(),
+            language_preference=language_preference or "en-IN",
+            facts={
+                "past_orders": past_orders or "",
+                "usual_quantities": usual_quantities or "",
+                "preferred_delivery_slot": preferred_delivery_slot or "",
+            },
+            livekit_identity=identity,
+        )
+        _set_active_user_id(context, profile.user_id)
+        logger.info("save_caller_memory: saved user_id=%s", profile.user_id)
+        return {"saved": True, "profile": profile.to_dict()}
+
+
+server = AgentServer(num_idle_processes=1)
 
 
 def prewarm(proc: JobProcess):
@@ -242,6 +390,22 @@ async def my_agent(ctx: JobContext):
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
+
+    # Join the room FIRST so the frontend sees the agent before any LLM/TTS work.
+    # Starting the session before connect caused "Agent did not join the room"
+    # (on_enter TTS ran while ctx.connect() was still pending / timing out).
+    await ctx.connect()
+
+    livekit_identity = "console-user"
+    if not ctx.is_fake_job():
+        # Prefer an already-present caller; otherwise wait briefly.
+        remotes = list(ctx.room.remote_participants.values())
+        if remotes:
+            livekit_identity = remotes[0].identity
+        else:
+            participant = await ctx.wait_for_participant()
+            livekit_identity = participant.identity
+    logger.info("Caller LiveKit identity: %s", livekit_identity)
 
     session = AgentSession(
         stt=deepgram.STT(
@@ -267,8 +431,12 @@ async def my_agent(ctx: JobContext):
         ),
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
-        # Wait for a fuller transcript before drafting a reply.
+        # Keep False for Day 3 listening quality (fuller transcript before reply).
         preemptive_generation=False,
+        userdata={
+            "livekit_identity": livekit_identity,
+            "active_user_id": "",
+        },
     )
 
     await session.start(
@@ -285,8 +453,6 @@ async def my_agent(ctx: JobContext):
             ),
         ),
     )
-
-    await ctx.connect()
 
 
 if __name__ == "__main__":

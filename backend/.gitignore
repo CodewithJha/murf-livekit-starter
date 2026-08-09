@@ -11,6 +11,9 @@ KMS
 .pytest_cache
 .ruff_cache
 
+# Day 4 caller memory (SQLite)
+data/*.db
+
 # Claude Code
 .claude/settings.local.json
 .claude/worktrees/

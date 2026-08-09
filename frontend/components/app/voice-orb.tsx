@@ -6,7 +6,8 @@ import { cn } from '@/lib/shadcn/utils';
 export type VoiceOrbMode = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking';
 
 /**
- * Voice orb with JS-driven pulse so Safari + Reduce Motion still show activity.
+ * Compact voice control. Speaking/listening use a shuttle-line ring
+ * (traveling arc) instead of a large pulsing glow.
  */
 export function VoiceOrb({
   mode = 'idle',
@@ -30,32 +31,25 @@ export function VoiceOrb({
         last = now;
       }
       raf = requestAnimationFrame(loop);
-      return;
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
   }, []);
 
   const t = tick * 0.08;
-  let scale = 1;
-  let glow = 0.35;
+  const speaking = mode === 'speaking';
+  const listening = mode === 'listening';
+  const thinking = mode === 'thinking' || mode === 'connecting';
 
-  if (mode === 'speaking') {
-    scale = 1 + Math.sin(t * 2.2) * 0.045 + Math.sin(t * 3.1) * 0.02;
-    glow = 0.45 + (Math.sin(t * 2.2) * 0.5 + 0.5) * 0.35;
-  } else if (mode === 'listening') {
-    scale = 1 + Math.sin(t * 1.1) * 0.035;
-    glow = 0.4 + (Math.sin(t * 1.1) * 0.5 + 0.5) * 0.3;
-  } else if (mode === 'thinking' || mode === 'connecting') {
-    scale = 1 + Math.sin(t * 0.7) * 0.02;
-    glow = 0.32 + (Math.sin(t * 0.7) * 0.5 + 0.5) * 0.18;
-  } else {
-    scale = 1 + Math.sin(t * 0.45) * 0.012;
-    glow = 0.28 + (Math.sin(t * 0.45) * 0.5 + 0.5) * 0.16;
-  }
+  // Shuttle angle travels around the ring
+  const shuttleAngle =
+    speaking || listening ? (tick * (speaking ? 4.5 : 2.2)) % 360 : thinking ? (tick * 2.2) % 360 : 0;
 
-  const ringRotate =
-    mode === 'thinking' || mode === 'connecting' ? (tick * 2.2) % 360 : 0;
+  const coreScale = speaking
+    ? 1 + Math.sin(t * 2) * 0.012
+    : listening
+      ? 1 + Math.sin(t * 1.1) * 0.01
+      : 1 + Math.sin(t * 0.45) * 0.008;
 
   return (
     <button
@@ -63,61 +57,63 @@ export function VoiceOrb({
       aria-label="Voice"
       disabled={!onClick}
       onClick={onClick}
+      data-orb="shuttle-v3"
       className={cn(
-        'relative flex size-[196px] shrink-0 items-center justify-center overflow-hidden rounded-full border-0 bg-transparent p-0',
+        'relative flex shrink-0 items-center justify-center overflow-visible rounded-full border-0 bg-transparent p-0',
         onClick ? 'cursor-pointer' : 'cursor-default',
         className
       )}
+      style={{ width: 128, height: 128 }}
     >
-      <span
-        className="pointer-events-none absolute inset-[-8%] rounded-full bg-[#B87444] blur-2xl"
-        style={{ opacity: glow, transform: `scale(${0.95 + glow * 0.15})` }}
-      />
-
-      {(mode === 'idle' || mode === 'listening') && (
-        <>
-          <span
-            className="pointer-events-none absolute inset-[8%] rounded-full border border-[#B87444]/30"
-            style={{
-              transform: `scale(${0.92 + (Math.sin(t) * 0.5 + 0.5) * 0.28})`,
-              opacity: 0.35 - (Math.sin(t) * 0.5 + 0.5) * 0.3,
-            }}
-          />
-          <span
-            className="pointer-events-none absolute inset-[8%] rounded-full border border-[#B87444]/18"
-            style={{
-              transform: `scale(${0.92 + (Math.sin(t + 1.2) * 0.5 + 0.5) * 0.28})`,
-              opacity: 0.28 - (Math.sin(t + 1.2) * 0.5 + 0.5) * 0.25,
-            }}
-          />
-        </>
-      )}
-
-      {(mode === 'thinking' || mode === 'connecting') && (
+      {/* Shuttle line ring — primary speaking/listening effect */}
+      {(speaking || listening || thinking) && (
         <span
-          className="pointer-events-none absolute inset-[-4%] rounded-full"
+          className="pointer-events-none absolute inset-0 rounded-full"
           style={{
-            transform: `rotate(${ringRotate}deg)`,
-            background:
-              'conic-gradient(from 0deg, transparent 0%, rgba(184,116,68,0.55) 28%, transparent 58%)',
+            transform: `rotate(${shuttleAngle}deg)`,
+            background: speaking
+              ? 'conic-gradient(from 0deg, transparent 0%, transparent 62%, rgba(184,116,68,0.15) 72%, rgba(184,116,68,0.95) 86%, rgba(184,116,68,0.15) 94%, transparent 100%)'
+              : listening
+                ? 'conic-gradient(from 0deg, transparent 0%, transparent 70%, rgba(184,116,68,0.7) 85%, transparent 100%)'
+                : 'conic-gradient(from 0deg, transparent 0%, rgba(184,116,68,0.5) 28%, transparent 58%)',
             WebkitMask:
-              'radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1px))',
-            mask: 'radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1px))',
+              'radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 1.5px))',
+            mask: 'radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 1.5px))',
           }}
         />
       )}
 
+      {/* Quiet idle ring */}
+      {mode === 'idle' && (
+        <span
+          className="pointer-events-none absolute inset-[6%] rounded-full border"
+          style={{
+            borderColor: 'rgba(184,116,68,0.28)',
+            opacity: 0.55 + Math.sin(t * 0.5) * 0.15,
+          }}
+        />
+      )}
+
+      {/* Compact core — no big glow bloom */}
       <div
-        className="relative z-[1] size-[72%] rounded-full"
+        className="relative z-[1] rounded-full"
         style={{
-          transform: `scale(${scale})`,
+          width: '58%',
+          height: '58%',
+          transform: `scale(${coreScale})`,
           background:
-            'radial-gradient(circle at 30% 26%, #FFFFFF 0%, #F6F2EB 36%, #E8D5C0 64%, #B87444 100%)',
-          boxShadow:
-            '0 24px 50px -24px rgba(184,116,68,0.5), inset 0 1px 1px rgba(255,255,255,0.85)',
+            'radial-gradient(circle at 30% 26%, #FFFFFF 0%, #F6F2EB 40%, #E8D5C0 68%, #B87444 100%)',
+          boxShadow: '0 10px 24px -14px rgba(184,116,68,0.45), inset 0 1px 1px rgba(255,255,255,0.85)',
         }}
       >
-        <div className="absolute inset-[14%] rounded-full bg-[radial-gradient(circle_at_38%_32%,rgba(255,255,255,0.95),transparent_70%)]" />
+        <div
+          className="absolute rounded-full"
+          style={{
+            inset: '16%',
+            background:
+              'radial-gradient(circle at 38% 32%, rgba(255,255,255,0.95), transparent 70%)',
+          }}
+        />
       </div>
     </button>
   );

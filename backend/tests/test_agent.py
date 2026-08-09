@@ -112,7 +112,7 @@ async def test_hinglish_order_taking() -> None:
                 llm,
                 intent="""
                 Acknowledges both items (milk/doodh and biscuits) with quantities.
-                Reply may be Hinglish or simple Indian English matching a shop assistant.
+                Reply may be Hindi in Devanagari, Hinglish, or simple Indian English.
                 Does not invent a final price or claim the order is fully confirmed.
                 """,
             )

@@ -1,7 +1,7 @@
 'use client';
 
-import { useMemo } from 'react';
-import { TokenSource } from 'livekit-client';
+import { useEffect, useMemo } from 'react';
+import { Room, TokenSource } from 'livekit-client';
 import { useSession } from '@livekit/components-react';
 import { WarningIcon } from '@phosphor-icons/react/dist/ssr';
 import type { AppConfig } from '@/app-config';
@@ -20,6 +20,24 @@ function AppSetup() {
   useDebugMode({ enabled: IN_DEVELOPMENT });
   useAgentErrors();
 
+  // Safari/Next overlay: LiveKit can throw unhandled NegotiationError during ICE.
+  useEffect(() => {
+    const onRejection = (event: PromiseRejectionEvent) => {
+      const reason = event.reason;
+      const name = reason?.name ? String(reason.name) : '';
+      const message = reason?.message ? String(reason.message) : String(reason ?? '');
+      if (
+        name === 'NegotiationError' ||
+        message.toLowerCase().includes('negotiation timed out') ||
+        message.toLowerCase().includes('negotiation')
+      ) {
+        event.preventDefault();
+      }
+    };
+    window.addEventListener('unhandledrejection', onRejection);
+    return () => window.removeEventListener('unhandledrejection', onRejection);
+  }, []);
+
   return null;
 }
 
@@ -34,10 +52,23 @@ export function App({ appConfig }: AppProps) {
       : TokenSource.endpoint('/api/token');
   }, [appConfig]);
 
-  const session = useSession(
-    tokenSource,
-    appConfig.agentName ? { agentName: appConfig.agentName } : undefined
+  // Stable Room — connect timeouts are set in start({ roomConnectOptions }).
+  const room = useMemo(
+    () =>
+      new Room({
+        adaptiveStream: true,
+        dynacast: true,
+        disconnectOnPageLeave: true,
+      }),
+    []
   );
+
+  const session = useSession(tokenSource, {
+    room,
+    ...(appConfig.agentName ? { agentName: appConfig.agentName } : {}),
+    // Agent can take >10s on cold start / slow LiveKit connect; default is too tight.
+    agentConnectTimeoutMilliseconds: 60_000,
+  });
 
   return (
     <AgentSessionProvider session={session} volume={1}>

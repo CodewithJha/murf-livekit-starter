@@ -180,9 +180,24 @@ export function VoiceWorkspace({ appConfig }: VoiceWorkspaceProps) {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach((t) => t.stop());
-      await start();
+      await start({
+        roomConnectOptions: {
+          // Default 15s is tight on Safari / flaky networks → NegotiationError.
+          peerConnectionTimeout: 60_000,
+          websocketTimeout: 30_000,
+          maxRetries: 3,
+        },
+      });
     } catch (error) {
-      setMicError(micErrorMessage(error));
+      const message =
+        error && typeof error === 'object' && 'message' in error
+          ? String((error as { message?: string }).message)
+          : '';
+      if (message.toLowerCase().includes('negotiation')) {
+        setMicError('Connection timed out. Check Wi‑Fi/VPN, then try Start again.');
+      } else {
+        setMicError(micErrorMessage(error));
+      }
       setCallEnded(false);
     } finally {
       setStarting(false);

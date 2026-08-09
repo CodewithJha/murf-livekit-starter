@@ -160,11 +160,11 @@ export function LeftVoicePanel({
         </div>
       ) : null}
 
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 overflow-hidden py-6">
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 overflow-hidden py-4">
         <VoiceOrb mode={orbMode(status)} onClick={callActive ? undefined : onStart} />
         <Waveform
           active={status === 'listening' || status === 'speaking'}
-          className="max-w-[240px]"
+          className="max-w-[168px] shrink-0"
         />
       </div>
 
