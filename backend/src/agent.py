@@ -22,6 +22,7 @@ from livekit.agents.llm.tool_context import ToolFlag
 from livekit.plugins import deepgram, google, murf, noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
+from catalogue import CatalogueStore
 from memory_store import MemoryStore
 
 logger = logging.getLogger("agent")
@@ -29,20 +30,22 @@ logger = logging.getLogger("agent")
 load_dotenv(".env.local")
 
 _memory_store = MemoryStore()
+_catalogue_store = CatalogueStore()
 
-# Voice for Bharat 2026 — Local Commerce (kirana order taking) + Day 4 memory.
+# Voice for Bharat 2026 — Local Commerce (kirana order taking) + Day 4 memory + Day 5 tools.
 # Voice: Anisha — locale switches to hi-IN only for clear Hindi/Hinglish turns.
 SYSTEM_PROMPT = """
 IDENTITY
 You are Dukaan Dost, the voice order assistant for a small Indian kirana shop.
-You take spoken grocery orders. You are not the shopkeeper and you never set price or delivery.
+You take spoken grocery orders. You are not the shopkeeper. Final bill and delivery stay with the shopkeeper.
 
 OBJECTIVES
 On every order turn:
 1. Listen for item names and quantities.
 2. Repeat each item and quantity back clearly so the customer can correct you.
-3. Ask if they want anything else.
-4. When they are done, read a short order summary and say the shopkeeper will confirm price, stock, and delivery.
+3. When the caller asks about stock, availability, or indicative price — call lookup_kirana_item before answering.
+4. Ask if they want anything else.
+5. When they are done, read a short order summary and say the shopkeeper will confirm the final bill, stock, and delivery.
 
 Example English replies:
 - "Got it — two litres of milk. Anything else?"
@@ -56,7 +59,7 @@ Example Hindi replies (only when customer spoke Hindi/Hinglish) — Devanagari o
 Never reply with empty filler like only "Haan ji", "Okay ji", "Theek hai", "हाँ जी" without naming the item and quantity.
 
 MEMORY — use tools, never invent saved history
-You have two tools: lookup_caller and save_caller_memory.
+Tools: lookup_caller, save_caller_memory, lookup_kirana_item.
 - After you greet (or as soon as the caller shares their name), call lookup_caller with their name.
 - If a profile is found: greet/welcome them by name, briefly continue from last time using their facts (past orders, usual quantities, preferred delivery slot), then take today's order.
 - If not found: treat them as a new customer, ask their name if still unknown, then take the order.
@@ -66,9 +69,16 @@ You have two tools: lookup_caller and save_caller_memory.
 - Never claim you remembered something you did not save via the tool.
 - Do not call tools on the very first greeting turn before the user has spoken.
 
+CATALOGUE — lookup_kirana_item
+- Call when the caller asks if something is in stock, available, how much it costs, or wants an approximate line total.
+- Pass the spoken item name (English is fine: onion, tomato, milk). Optionally pass quantity for an indicative total.
+- Speak only facts returned by the tool. Mention it is indicative / from today's catalogue list, and the shopkeeper confirms the final bill.
+- If found=false or error: say you could not find it in the list and offer to note it for the shopkeeper. Never invent stock or prices.
+- You may still take the order line even when the catalogue misses — note it for the shopkeeper.
+
 KNOWLEDGE
 Common kirana items: milk/दूध, atta/आटा, rice/चावल, oil/तेल, sugar/चीनी, tea/चाय, biscuits, eggs/अंडे, onions/प्याज, tomatoes/टमाटर, potatoes/आलू, and similar.
-If an item is unclear, ask one short clarifying question. Do not invent stock, prices, or delivery times.
+If an item is unclear, ask one short clarifying question. Do not invent stock, prices, or delivery times outside tool results.
 
 LANGUAGE & SCRIPT — follow strictly
 Always write every language in its own native script.
@@ -84,9 +94,10 @@ Do not flip languages randomly. Do not greet in Hindi after an English "hi".
 
 GUARDRAILS
 Never take payments, OTPs, or card details.
-Never confirm final price, bill total, stock guarantee, or delivery time.
+Never invent prices or stock — only report catalogue tool results as indicative.
+Never confirm a final bill total, stock guarantee, or delivery time as booked.
 Never claim the order is fully booked.
-If they ask for price/delivery: note the request for the shopkeeper and keep taking items.
+If they ask for delivery timing: note it for the shopkeeper and keep taking items.
 Refuse medical, legal, financial, or illegal help.
 
 STYLE
@@ -235,9 +246,14 @@ def _set_active_user_id(context: RunContext, user_id: str) -> None:
 
 
 class Assistant(Agent):
-    def __init__(self, memory_store: MemoryStore | None = None) -> None:
+    def __init__(
+        self,
+        memory_store: MemoryStore | None = None,
+        catalogue_store: CatalogueStore | None = None,
+    ) -> None:
         super().__init__(instructions=SYSTEM_PROMPT)
         self._memory = memory_store or _memory_store
+        self._catalogue = catalogue_store or _catalogue_store
 
     async def on_enter(self) -> None:
         # Gemini rejects tool-call→reply on enter ("function call turn must follow
@@ -373,6 +389,45 @@ class Assistant(Agent):
         _set_active_user_id(context, profile.user_id)
         logger.info("save_caller_memory: saved user_id=%s", profile.user_id)
         return {"saved": True, "profile": profile.to_dict()}
+
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    async def lookup_kirana_item(
+        self,
+        context: RunContext,
+        item_name: str,
+        quantity: float = 0,
+    ) -> dict[str, Any]:
+        """Look up kirana stock and indicative price from the local catalogue CSV.
+
+        Call when the caller asks about availability, stock, price, or an
+        approximate line total. Never invent catalogue facts — speak only what
+        this tool returns. Prices are indicative; shopkeeper confirms the bill.
+
+        Args:
+            item_name: Spoken item to search (e.g. onion, tomato, milk).
+            quantity: Optional pack/kilo count for an indicative line total.
+                Pass 0 to skip the total estimate.
+        """
+        query = (item_name or "").strip()
+        if not query:
+            return {
+                "found": False,
+                "error": False,
+                "message": "Need an item name to look up.",
+            }
+
+        if quantity and float(quantity) > 0:
+            result = self._catalogue.estimate_line_total(query, float(quantity))
+        else:
+            result = self._catalogue.lookup(query)
+
+        logger.info(
+            "lookup_kirana_item: query=%r found=%s stock=%s",
+            query,
+            result.get("found"),
+            result.get("stock_status"),
+        )
+        return result
 
 
 server = AgentServer(num_idle_processes=1)

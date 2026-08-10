@@ -181,9 +181,23 @@ The project includes an eval suite based on the LiveKit Agents [testing framewor
 uv run pytest
 ```
 
-Tests are in [`tests/test_agent.py`](tests/test_agent.py) and use LLM-as-judge evaluations to verify the agent behaves correctly (friendly greetings, grounding, refusing harmful requests).
+- [`tests/test_agent.py`](tests/test_agent.py) — LLM-as-judge evals (needs LiveKit credentials)
+- [`tests/test_memory_store.py`](tests/test_memory_store.py) — Day 4 SQLite memory (offline)
+- [`tests/test_catalogue.py`](tests/test_catalogue.py) — Day 5 catalogue lookup (offline)
 
-To run tests in CI, you'll need to add `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` as repository secrets.
+To run LiveKit evals in CI, add `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` as repository secrets.
+
+## Day 5 — Catalogue tool
+
+`lookup_kirana_item` searches a **local CSV**, not a live store API.
+
+| Path | Source |
+| ---- | ------ |
+| [`data/zepto_catalogue.csv`](data/zepto_catalogue.csv) | Public scraped Zepto-style inventory ([zepto_v2.csv](https://raw.githubusercontent.com/amlanmohanty1/zepto-SQL-data-analysis-project/main/zepto_v2.csv)) |
+
+Money columns in the CSV are in **paise**; the agent converts to rupees for speech. Prices and stock are **indicative** — the prompt still defers the final bill to the shopkeeper. If the file is missing, the tool returns a graceful error and the agent must not invent numbers.
+
+Loader: [`src/catalogue.py`](src/catalogue.py).
 
 ## Deployment
 
@@ -212,13 +226,20 @@ docker run --env-file .env.local murf-voice-agent
 ```
 backend/
 ├── src/
-│   └── agent.py          # Agent entrypoint — pipeline, prompt, config
+│   ├── agent.py          # Agent entrypoint — pipeline, prompt, tools
+│   ├── memory_store.py   # Day 4 SQLite caller memory
+│   └── catalogue.py      # Day 5 CSV catalogue lookup
+├── data/
+│   ├── .gitkeep
+│   └── zepto_catalogue.csv   # Public scraped inventory (not a live API)
 ├── tests/
-│   └── test_agent.py     # LLM-judged eval suite
-├── .env.example           # Environment variable template
-├── pyproject.toml         # Python dependencies (uv)
-├── Dockerfile             # Production container
-└── railway.toml           # Railway deploy config
+│   ├── test_agent.py
+│   ├── test_memory_store.py
+│   └── test_catalogue.py
+├── .env.example
+├── pyproject.toml
+├── Dockerfile
+└── railway.toml
 ```
 
 ## Links
