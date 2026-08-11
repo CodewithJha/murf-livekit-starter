@@ -184,6 +184,7 @@ uv run pytest
 - [`tests/test_agent.py`](tests/test_agent.py) — LLM-as-judge evals (needs LiveKit credentials)
 - [`tests/test_memory_store.py`](tests/test_memory_store.py) — Day 4 SQLite memory (offline)
 - [`tests/test_catalogue.py`](tests/test_catalogue.py) — Day 5 catalogue lookup (offline)
+- [`tests/test_outbound_context.py`](tests/test_outbound_context.py) — Day 6 greeting / metadata (offline)
 
 To run LiveKit evals in CI, add `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` as repository secrets.
 
@@ -198,6 +199,25 @@ To run LiveKit evals in CI, add `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_A
 Money columns in the CSV are in **paise**; the agent converts to rupees for speech. Prices and stock are **indicative** — the prompt still defers the final bill to the shopkeeper. If the file is missing, the tool returns a graceful error and the agent must not invent numbers.
 
 Loader: [`src/catalogue.py`](src/catalogue.py).
+
+## Day 6 — Outbound order confirmation
+
+The browser agent stays inbound. Outbound uses a **second worker** (`outbound-agent`) over LiveKit SIP (Linphone recommended; Twilio optional).
+
+Full setup: [`src/telephony/README.md`](src/telephony/README.md).
+
+```bash
+# Terminal 1
+uv run python src/telephony/outbound/agent.py start
+
+# Terminal 2
+uv run python src/telephony/outbound/dial.py \
+  --to "sip:YOUR_LINPHONE_USER@sip.linphone.org" \
+  --name "Priyanshu" \
+  --order "two litres milk and one kilo onion"
+```
+
+Requires `LIVEKIT_SIP_OUTBOUND_TRUNK_ID` in `.env.local`. Opening line states who is calling, why, and how to opt out.
 
 ## Deployment
 
@@ -226,16 +246,23 @@ docker run --env-file .env.local murf-voice-agent
 ```
 backend/
 ├── src/
-│   ├── agent.py          # Agent entrypoint — pipeline, prompt, tools
+│   ├── agent.py          # Browser agent — pipeline, prompt, tools
 │   ├── memory_store.py   # Day 4 SQLite caller memory
-│   └── catalogue.py      # Day 5 CSV catalogue lookup
+│   ├── catalogue.py      # Day 5 CSV catalogue lookup
+│   └── telephony/        # Day 6 outbound SIP calls
+│       ├── README.md
+│       └── outbound/
+│           ├── agent.py
+│           ├── dial.py
+│           └── call_context.py
 ├── data/
 │   ├── .gitkeep
 │   └── zepto_catalogue.csv   # Public scraped inventory (not a live API)
 ├── tests/
 │   ├── test_agent.py
 │   ├── test_memory_store.py
-│   └── test_catalogue.py
+│   ├── test_catalogue.py
+│   └── test_outbound_context.py
 ├── .env.example
 ├── pyproject.toml
 ├── Dockerfile
