@@ -185,6 +185,7 @@ uv run pytest
 - [`tests/test_memory_store.py`](tests/test_memory_store.py) — Day 4 SQLite memory (offline)
 - [`tests/test_catalogue.py`](tests/test_catalogue.py) — Day 5 catalogue lookup (offline)
 - [`tests/test_outbound_context.py`](tests/test_outbound_context.py) — Day 6 greeting / metadata (offline)
+- [`tests/test_escalation_store.py`](tests/test_escalation_store.py) — Day 7 human-help escalations (offline)
 
 To run LiveKit evals in CI, add `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` as repository secrets.
 
@@ -219,6 +220,21 @@ uv run python src/telephony/outbound/dial.py \
 
 Requires `LIVEKIT_SIP_OUTBOUND_TRUNK_ID` in `.env.local`. Opening line states who is calling, why, and how to opt out.
 
+## Day 7 — Human help escalations
+
+Browser agent only (no SIP). When a caller has a **payment/refund dispute** or **order dispute**, the agent can call `create_escalation` after explicit consent.
+
+| Storage | Path |
+| ------- | ---- |
+| SQLite | [`data/dukaan_dost.db`](data/dukaan_dost.db) — `escalations` table |
+| JSONL mirror | [`data/escalations.jsonl`](data/escalations.jsonl) — append-only for the shopkeeper UI |
+
+The tool returns a reference ID (`ESC-…`) and an honest next step (shopkeeper will review; no instant callback promised). Summaries are sanitized — OTP/PIN/card-like strings are redacted before write.
+
+Shopkeeper view: frontend [`/escalations`](http://127.0.0.1:3001/escalations) reads the JSONL via [`frontend/app/api/escalations/route.ts`](../frontend/app/api/escalations/route.ts).
+
+Loader: [`src/escalation_store.py`](src/escalation_store.py).
+
 ## Deployment
 
 ### Railway
@@ -249,6 +265,7 @@ backend/
 │   ├── agent.py          # Browser agent — pipeline, prompt, tools
 │   ├── memory_store.py   # Day 4 SQLite caller memory
 │   ├── catalogue.py      # Day 5 CSV catalogue lookup
+│   ├── escalation_store.py  # Day 7 human-help escalations
 │   └── telephony/        # Day 6 outbound SIP calls
 │       ├── README.md
 │       └── outbound/
@@ -262,7 +279,8 @@ backend/
 │   ├── test_agent.py
 │   ├── test_memory_store.py
 │   ├── test_catalogue.py
-│   └── test_outbound_context.py
+│   ├── test_outbound_context.py
+│   └── test_escalation_store.py
 ├── .env.example
 ├── pyproject.toml
 ├── Dockerfile

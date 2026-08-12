@@ -23,6 +23,7 @@ from livekit.plugins import deepgram, google, murf, noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from catalogue import CatalogueStore
+from escalation_store import EscalationStore
 from memory_store import MemoryStore
 
 logger = logging.getLogger("agent")
@@ -31,6 +32,7 @@ load_dotenv(".env.local")
 
 _memory_store = MemoryStore()
 _catalogue_store = CatalogueStore()
+_escalation_store = EscalationStore()
 
 # Voice for Bharat 2026 — Local Commerce (kirana order taking) + Day 4 memory + Day 5 tools.
 # Voice: Anisha — locale switches to hi-IN only for clear Hindi/Hinglish turns.
@@ -59,7 +61,7 @@ Example Hindi replies (only when customer spoke Hindi/Hinglish) — Devanagari o
 Never reply with empty filler like only "Haan ji", "Okay ji", "Theek hai", "हाँ जी" without naming the item and quantity.
 
 MEMORY — use tools, never invent saved history
-Tools: lookup_caller, save_caller_memory, lookup_kirana_item.
+Tools: lookup_caller, save_caller_memory, lookup_kirana_item, create_escalation.
 - After you greet (or as soon as the caller shares their name), call lookup_caller with their name.
 - If a profile is found: greet/welcome them by name, briefly continue from last time using their facts (past orders, usual quantities, preferred delivery slot), then take today's order.
 - If not found: treat them as a new customer, ask their name if still unknown, then take the order.
@@ -75,6 +77,22 @@ CATALOGUE — lookup_kirana_item
 - Speak only facts returned by the tool. Mention it is indicative / from today's catalogue list, and the shopkeeper confirms the final bill.
 - If found=false or error: say you could not find it in the list and offer to note it for the shopkeeper. Never invent stock or prices.
 - You may still take the order line even when the catalogue misses — note it for the shopkeeper.
+
+HUMAN HELP — create_escalation (only two cases)
+Use create_escalation ONLY when the caller needs a human shopkeeper for:
+1. payment_refund_dispute — charged wrong, wants refund, UPI/payment issue, double charge.
+2. order_dispute — wrong/missing items, damaged goods, delivery complaint about a past order.
+
+Do NOT escalate for normal order-taking ("two litres milk", price checks, new orders).
+Before calling create_escalation:
+- Explain briefly what you will share with the shopkeeper (name, issue summary, what you already checked).
+- Ask clear permission: "Shall I pass this to the shopkeeper for follow-up?"
+- Call create_escalation only after a clear yes. Set caller_consented=true only then.
+- If they refuse, do not create. You may call with caller_consented=false or skip.
+After a successful create:
+- Give the reference ID (ESC-…) clearly.
+- Say the shopkeeper will review and follow up. Do NOT promise an instant callback or refund.
+- Do not take OTPs, PINs, card numbers, or full payment details — ever.
 
 KNOWLEDGE
 Common kirana items: milk/दूध, atta/आटा, rice/चावल, oil/तेल, sugar/चीनी, tea/चाय, biscuits, eggs/अंडे, onions/प्याज, tomatoes/टमाटर, potatoes/आलू, and similar.
@@ -250,10 +268,12 @@ class Assistant(Agent):
         self,
         memory_store: MemoryStore | None = None,
         catalogue_store: CatalogueStore | None = None,
+        escalation_store: EscalationStore | None = None,
     ) -> None:
         super().__init__(instructions=SYSTEM_PROMPT)
         self._memory = memory_store or _memory_store
         self._catalogue = catalogue_store or _catalogue_store
+        self._escalations = escalation_store or _escalation_store
 
     async def on_enter(self) -> None:
         # Gemini rejects tool-call→reply on enter ("function call turn must follow
@@ -428,6 +448,52 @@ class Assistant(Agent):
             result.get("stock_status"),
         )
         return result
+
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    async def create_escalation(
+        self,
+        context: RunContext,
+        reason: str,
+        what_happened: str,
+        already_checked: str,
+        urgency: str,
+        preferred_followup: str,
+        caller_name: str,
+        language: str,
+        caller_consented: bool,
+    ) -> dict[str, Any]:
+        """Create a human-help request for the shopkeeper ONLY after explicit consent.
+
+        Use only for payment/refund disputes or order disputes — not for normal
+        grocery ordering. Ask permission first and explain what will be shared.
+
+        Args:
+            reason: payment_refund_dispute or order_dispute.
+            what_happened: Short 1-2 sentence summary (no OTP/PIN/card details).
+            already_checked: What you already tried (catalogue lookup, order note, etc.).
+            urgency: low, medium, or high (default medium).
+            preferred_followup: How they want follow-up (call back, WhatsApp, in-shop).
+            caller_name: Caller's name.
+            language: en-IN or hi-IN.
+            caller_consented: True only after the caller explicitly agreed to escalate.
+        """
+        _ = context
+        logger.info(
+            "create_escalation: reason=%r consented=%s caller=%r",
+            reason,
+            caller_consented,
+            caller_name,
+        )
+        return self._escalations.create(
+            reason=reason,
+            what_happened=what_happened,
+            already_checked=already_checked,
+            urgency=urgency or "medium",
+            preferred_followup=preferred_followup or "",
+            caller_name=caller_name,
+            language=language or "en-IN",
+            caller_consented=caller_consented,
+        )
 
 
 server = AgentServer(num_idle_processes=1)

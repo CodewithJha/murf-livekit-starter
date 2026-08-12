@@ -11,8 +11,9 @@ KMS
 .pytest_cache
 .ruff_cache
 
-# Day 4 caller memory (SQLite)
+# Day 4 caller memory (SQLite) + Day 7 escalations mirror
 data/*.db
+data/escalations.jsonl
 
 # Claude Code
 .claude/settings.local.json
