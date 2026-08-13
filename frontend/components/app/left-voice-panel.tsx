@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { Ear, Loader2, Mic, MicOff, Phone, PhoneOff, Volume2, Wifi } from 'lucide-react';
 import { motion } from 'motion/react';
 import { VoiceOrb, type VoiceOrbMode } from '@/components/app/voice-orb';
@@ -129,7 +130,12 @@ export function LeftVoicePanel({
           <p className="text-dd-ink truncate text-[15px] font-semibold tracking-tight">
             {companyName}
           </p>
-          <p className="text-dd-muted truncate text-[12px]">Voice-first Local Commerce</p>
+          <p className="text-dd-muted truncate text-[12px]">
+            Voice-first Local Commerce ·{' '}
+            <Link href="/analytics" className="text-dd-accent hover:underline">
+              Analytics
+            </Link>
+          </p>
         </div>
       </div>
 

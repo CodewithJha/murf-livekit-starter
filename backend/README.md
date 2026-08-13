@@ -186,6 +186,7 @@ uv run pytest
 - [`tests/test_catalogue.py`](tests/test_catalogue.py) — Day 5 catalogue lookup (offline)
 - [`tests/test_outbound_context.py`](tests/test_outbound_context.py) — Day 6 greeting / metadata (offline)
 - [`tests/test_escalation_store.py`](tests/test_escalation_store.py) — Day 7 human-help escalations (offline)
+- [`tests/test_call_analytics_store.py`](tests/test_call_analytics_store.py) — Day 8 call analytics (offline)
 
 To run LiveKit evals in CI, add `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` as repository secrets.
 
@@ -235,6 +236,23 @@ Shopkeeper view: frontend [`/escalations`](http://127.0.0.1:3001/escalations) re
 
 Loader: [`src/escalation_store.py`](src/escalation_store.py).
 
+## Day 8 — Call analytics dashboard
+
+Browser agent only (no SIP). Every LiveKit session writes one row when the call ends.
+
+**Success** means at least one of: an order line was noted (`note_order_line`), the catalogue found a product, or a human-help escalation was created. Otherwise the call is **failed** (incomplete enquiry or no engagement). Failed does not mean the app crashed.
+
+| Storage | Path |
+| ------- | ---- |
+| SQLite | [`data/dukaan_dost.db`](data/dukaan_dost.db) — `calls` table |
+| JSONL mirror | [`data/calls.jsonl`](data/calls.jsonl) — append-only for the dashboard |
+
+Rows store outcome, duration, channel, language, and success flags only — **no names, identities, or transcripts**. No new secrets required.
+
+Dashboard: frontend [`/analytics`](http://127.0.0.1:3001/analytics) reads the JSONL via [`frontend/app/api/analytics/route.ts`](../frontend/app/api/analytics/route.ts). It shows total / successful / failed calls plus success rate.
+
+Loader: [`src/call_analytics_store.py`](src/call_analytics_store.py).
+
 ## Deployment
 
 ### Railway
@@ -266,6 +284,7 @@ backend/
 │   ├── memory_store.py   # Day 4 SQLite caller memory
 │   ├── catalogue.py      # Day 5 CSV catalogue lookup
 │   ├── escalation_store.py  # Day 7 human-help escalations
+│   ├── call_analytics_store.py  # Day 8 call analytics
 │   └── telephony/        # Day 6 outbound SIP calls
 │       ├── README.md
 │       └── outbound/
@@ -280,7 +299,8 @@ backend/
 │   ├── test_memory_store.py
 │   ├── test_catalogue.py
 │   ├── test_outbound_context.py
-│   └── test_escalation_store.py
+│   ├── test_escalation_store.py
+│   └── test_call_analytics_store.py
 ├── .env.example
 ├── pyproject.toml
 ├── Dockerfile

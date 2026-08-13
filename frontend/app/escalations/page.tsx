@@ -48,8 +48,8 @@ export default function EscalationsPage() {
   }, [load]);
 
   return (
-    <main className="bg-dd-bg text-dd-ink min-h-full overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-5 py-10 sm:px-8">
+    <main className="bg-dd-bg text-dd-ink h-svh overflow-y-auto overscroll-y-contain">
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-5 py-10 pb-20 sm:px-8">
         <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-dd-muted text-sm tracking-wide uppercase">Dukaan Dost</p>
@@ -67,6 +67,12 @@ export default function EscalationsPage() {
             >
               {loading ? 'Refreshing…' : 'Refresh'}
             </button>
+            <Link
+              href="/analytics"
+              className="text-dd-accent hover:text-dd-accent-hover text-sm underline-offset-4 hover:underline"
+            >
+              Analytics
+            </Link>
             <Link
               href="/"
               className="text-dd-accent hover:text-dd-accent-hover text-sm underline-offset-4 hover:underline"

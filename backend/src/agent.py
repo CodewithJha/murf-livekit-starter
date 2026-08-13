@@ -22,6 +22,7 @@ from livekit.agents.llm.tool_context import ToolFlag
 from livekit.plugins import deepgram, google, murf, noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
+from call_analytics_store import CallAnalyticsStore, new_call_id, utc_now_iso
 from catalogue import CatalogueStore
 from escalation_store import EscalationStore
 from memory_store import MemoryStore
@@ -33,6 +34,7 @@ load_dotenv(".env.local")
 _memory_store = MemoryStore()
 _catalogue_store = CatalogueStore()
 _escalation_store = EscalationStore()
+_analytics_store = CallAnalyticsStore()
 
 # Voice for Bharat 2026 — Local Commerce (kirana order taking) + Day 4 memory + Day 5 tools.
 # Voice: Anisha — locale switches to hi-IN only for clear Hindi/Hinglish turns.
@@ -44,7 +46,7 @@ You take spoken grocery orders. You are not the shopkeeper. Final bill and deliv
 OBJECTIVES
 On every order turn:
 1. Listen for item names and quantities.
-2. Repeat each item and quantity back clearly so the customer can correct you.
+2. Repeat each item and quantity back clearly so the customer can correct you. Then call note_order_line.
 3. When the caller asks about stock, availability, or indicative price — call lookup_kirana_item before answering.
 4. Ask if they want anything else.
 5. When they are done, read a short order summary and say the shopkeeper will confirm the final bill, stock, and delivery.
@@ -61,7 +63,7 @@ Example Hindi replies (only when customer spoke Hindi/Hinglish) — Devanagari o
 Never reply with empty filler like only "Haan ji", "Okay ji", "Theek hai", "हाँ जी" without naming the item and quantity.
 
 MEMORY — use tools, never invent saved history
-Tools: lookup_caller, save_caller_memory, lookup_kirana_item, create_escalation.
+Tools: lookup_caller, save_caller_memory, lookup_kirana_item, create_escalation, note_order_line.
 - After you greet (or as soon as the caller shares their name), call lookup_caller with their name.
 - If a profile is found: greet/welcome them by name, briefly continue from last time using their facts (past orders, usual quantities, preferred delivery slot), then take today's order.
 - If not found: treat them as a new customer, ask their name if still unknown, then take the order.
@@ -77,6 +79,11 @@ CATALOGUE — lookup_kirana_item
 - Speak only facts returned by the tool. Mention it is indicative / from today's catalogue list, and the shopkeeper confirms the final bill.
 - If found=false or error: say you could not find it in the list and offer to note it for the shopkeeper. Never invent stock or prices.
 - You may still take the order line even when the catalogue misses — note it for the shopkeeper.
+
+ORDER NOTE — note_order_line
+- When you confirm an item and quantity back to the caller, call note_order_line with that item name and quantity.
+- Do not call it for greetings, small talk, or catalogue-only questions with no order line.
+- Never mention analytics, dashboards, or call scoring to the caller.
 
 HUMAN HELP — create_escalation (only two cases)
 Use create_escalation ONLY when the caller needs a human shopkeeper for:
@@ -263,17 +270,104 @@ def _set_active_user_id(context: RunContext, user_id: str) -> None:
         userdata["active_user_id"] = user_id
 
 
+def _userdata_dict(context: RunContext) -> dict[str, Any] | None:
+    try:
+        userdata = context.userdata
+    except ValueError:
+        return None
+    if isinstance(userdata, dict):
+        return userdata
+    return None
+
+
+def _session_userdata(session: AgentSession) -> dict[str, Any]:
+    userdata = getattr(session, "userdata", None)
+    if isinstance(userdata, dict):
+        return userdata
+    return {}
+
+
+def _has_success_marker(userdata: dict[str, Any]) -> bool:
+    return bool(
+        int(userdata.get("order_line_count") or 0) > 0
+        or userdata.get("catalogue_found")
+        or userdata.get("escalation_created")
+    )
+
+
+def increment_order_line_count(context: RunContext) -> int:
+    userdata = _userdata_dict(context)
+    if userdata is None:
+        return 0
+    count = int(userdata.get("order_line_count") or 0) + 1
+    userdata["order_line_count"] = count
+    return count
+
+
+def mark_catalogue_found(context: RunContext) -> None:
+    userdata = _userdata_dict(context)
+    if userdata is not None:
+        userdata["catalogue_found"] = True
+
+
+def mark_catalogue_error(context: RunContext) -> None:
+    userdata = _userdata_dict(context)
+    if userdata is None or _has_success_marker(userdata):
+        return
+    userdata["failure_hint"] = "tool_error"
+
+
+def mark_escalation_created(context: RunContext) -> None:
+    userdata = _userdata_dict(context)
+    if userdata is not None:
+        userdata["escalation_created"] = True
+
+
+async def finalize_browser_call(
+    session: AgentSession,
+    store: CallAnalyticsStore | None = None,
+) -> dict[str, Any] | None:
+    """Write one analytics row for this session. Idempotent via call_id / flag."""
+    analytics = store or _analytics_store
+    userdata = _session_userdata(session)
+    if userdata.get("call_recorded"):
+        return None
+
+    record = analytics.record(
+        call_id=str(userdata.get("call_id") or "") or None,
+        started_at=str(userdata.get("call_started_at") or "") or None,
+        channel="browser",
+        language=str(userdata.get("language") or "en-IN"),
+        order_line_count=int(userdata.get("order_line_count") or 0),
+        catalogue_found=bool(userdata.get("catalogue_found")),
+        escalation_created=bool(userdata.get("escalation_created")),
+        user_turn_count=int(userdata.get("user_turn_count") or 0),
+        failure_hint=str(userdata.get("failure_hint") or ""),
+    )
+    userdata["call_recorded"] = True
+    userdata["call_id"] = record.call_id
+    logger.info(
+        "call analytics recorded %s outcome=%s failure=%s",
+        record.call_id,
+        record.outcome,
+        record.failure_type or "-",
+    )
+    return record.to_dict()
+
+
 class Assistant(Agent):
     def __init__(
         self,
         memory_store: MemoryStore | None = None,
         catalogue_store: CatalogueStore | None = None,
         escalation_store: EscalationStore | None = None,
+        analytics_store: CallAnalyticsStore | None = None,
     ) -> None:
         super().__init__(instructions=SYSTEM_PROMPT)
         self._memory = memory_store or _memory_store
         self._catalogue = catalogue_store or _catalogue_store
         self._escalations = escalation_store or _escalation_store
+        self._analytics = analytics_store or _analytics_store
 
     async def on_enter(self) -> None:
         # Gemini rejects tool-call→reply on enter ("function call turn must follow
@@ -288,11 +382,22 @@ class Assistant(Agent):
             tool_choice="none",
         )
 
+    async def on_exit(self) -> None:
+        try:
+            session = self.session
+        except Exception:
+            return
+        await finalize_browser_call(session, self._analytics)
+
     async def on_user_turn_completed(
         self, turn_ctx: ChatContext, new_message: ChatMessage
     ) -> None:
         text = new_message.text_content or ""
         locale = _reply_locale_for_text(text)
+
+        userdata = _session_userdata(self.session)
+        userdata["language"] = locale
+        userdata["user_turn_count"] = int(userdata.get("user_turn_count") or 0) + 1
 
         tts = getattr(self.session, "tts", None)
         if tts is not None and hasattr(tts, "update_options"):
@@ -447,6 +552,10 @@ class Assistant(Agent):
             result.get("found"),
             result.get("stock_status"),
         )
+        if result.get("found"):
+            mark_catalogue_found(context)
+        elif result.get("error"):
+            mark_catalogue_error(context)
         return result
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
@@ -477,14 +586,13 @@ class Assistant(Agent):
             language: en-IN or hi-IN.
             caller_consented: True only after the caller explicitly agreed to escalate.
         """
-        _ = context
         logger.info(
             "create_escalation: reason=%r consented=%s caller=%r",
             reason,
             caller_consented,
             caller_name,
         )
-        return self._escalations.create(
+        result = self._escalations.create(
             reason=reason,
             what_happened=what_happened,
             already_checked=already_checked,
@@ -494,6 +602,40 @@ class Assistant(Agent):
             language=language or "en-IN",
             caller_consented=caller_consented,
         )
+        if result.get("created"):
+            mark_escalation_created(context)
+        return result
+
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    async def note_order_line(
+        self,
+        context: RunContext,
+        item_name: str,
+        quantity: float = 0,
+    ) -> dict[str, Any]:
+        """Record that you confirmed a kirana order line back to the caller.
+
+        Call when you repeat an item and quantity. Do not persist item names to
+        analytics — this only increments the call's order-line count.
+
+        Args:
+            item_name: Spoken item you confirmed (e.g. milk, onion).
+            quantity: Confirmed quantity. Pass 0 if unspecified.
+        """
+        query = (item_name or "").strip()
+        if not query:
+            return {
+                "noted": False,
+                "message": "Need an item name to note this order line.",
+            }
+
+        count = increment_order_line_count(context)
+        logger.info("note_order_line: item=%r qty=%s count=%s", query, quantity, count)
+        return {
+            "noted": True,
+            "order_line_count": count,
+            "message": "Order line noted for this call.",
+        }
 
 
 server = AgentServer(num_idle_processes=1)
@@ -528,6 +670,9 @@ async def my_agent(ctx: JobContext):
             livekit_identity = participant.identity
     logger.info("Caller LiveKit identity: %s", livekit_identity)
 
+    call_id = new_call_id()
+    call_started_at = utc_now_iso()
+
     session = AgentSession(
         stt=deepgram.STT(
             model="nova-3",
@@ -557,11 +702,25 @@ async def my_agent(ctx: JobContext):
         userdata={
             "livekit_identity": livekit_identity,
             "active_user_id": "",
+            "call_id": call_id,
+            "call_started_at": call_started_at,
+            "order_line_count": 0,
+            "catalogue_found": False,
+            "escalation_created": False,
+            "user_turn_count": 0,
+            "language": "en-IN",
+            "failure_hint": "",
+            "call_recorded": False,
         },
     )
 
+    async def on_shutdown() -> None:
+        await finalize_browser_call(session, _analytics_store)
+
+    ctx.add_shutdown_callback(on_shutdown)
+
     await session.start(
-        agent=Assistant(),
+        agent=Assistant(analytics_store=_analytics_store),
         room=ctx.room,
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(
