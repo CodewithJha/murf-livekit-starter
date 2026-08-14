@@ -8,6 +8,7 @@ import pytest
 
 from agent import (
     Assistant,
+    ReturnsRefundsAgent,
     finalize_browser_call,
     increment_order_line_count,
 )
@@ -249,7 +250,7 @@ async def test_escalation_sets_marker_after_consent(tmp_path) -> None:
         db_path=tmp_path / "esc.db",
         jsonl_path=tmp_path / "esc.jsonl",
     )
-    agent = Assistant(escalation_store=escalations, analytics_store=analytics)
+    agent = ReturnsRefundsAgent(escalation_store=escalations, analytics_store=analytics)
     ctx = _FakeRunContext()
     result = await agent.create_escalation(
         ctx,

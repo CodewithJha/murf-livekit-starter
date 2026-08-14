@@ -187,6 +187,7 @@ uv run pytest
 - [`tests/test_outbound_context.py`](tests/test_outbound_context.py) — Day 6 greeting / metadata (offline)
 - [`tests/test_escalation_store.py`](tests/test_escalation_store.py) — Day 7 human-help escalations (offline)
 - [`tests/test_call_analytics_store.py`](tests/test_call_analytics_store.py) — Day 8 call analytics (offline)
+- [`tests/test_handoff.py`](tests/test_handoff.py) — Day 9 returns specialist handoff (offline)
 
 To run LiveKit evals in CI, add `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` as repository secrets.
 
@@ -223,7 +224,7 @@ Requires `LIVEKIT_SIP_OUTBOUND_TRUNK_ID` in `.env.local`. Opening line states wh
 
 ## Day 7 — Human help escalations
 
-Browser agent only (no SIP). When a caller has a **payment/refund dispute** or **order dispute**, the agent can call `create_escalation` after explicit consent.
+Browser agent only (no SIP). When a caller has a **payment/refund dispute** or **order dispute**, Dukaan Dost hands off to the **returns specialist** (Day 9), who can call `create_escalation` after explicit consent.
 
 | Storage | Path |
 | ------- | ---- |
@@ -252,6 +253,19 @@ Rows store outcome, duration, channel, language, and success flags only — **no
 Dashboard: frontend [`/analytics`](http://127.0.0.1:3001/analytics) reads the JSONL via [`frontend/app/api/analytics/route.ts`](../frontend/app/api/analytics/route.ts). It shows total / successful / failed calls plus success rate.
 
 Loader: [`src/call_analytics_store.py`](src/call_analytics_store.py).
+
+## Day 9 — Returns specialist handoff
+
+Browser agent only. Dukaan Dost (Anisha) takes grocery orders. For payment/refund or past-order disputes it calls `transfer_to_returns`, which LiveKit switches to **`ReturnsRefundsAgent`** (Murf **Pooja** voice) with prior chat context copied (`exclude_instructions=True`).
+
+The specialist introduces itself, continues the dispute, and may create a shopkeeper ticket via `create_escalation` (Day 7). If the caller wants a new grocery order, it calls `transfer_to_dukaan_dost` to hand back.
+
+| Stay with Dukaan Dost | Hand off to returns |
+| --------------------- | ------------------- |
+| “Two litres milk” | “I was charged twice / I want a refund” |
+| Stock / price questions | Wrong, missing, or damaged past order |
+
+No new secrets. Same room — handoff is an in-session agent swap, not a second worker.
 
 ## Deployment
 
@@ -300,7 +314,8 @@ backend/
 │   ├── test_catalogue.py
 │   ├── test_outbound_context.py
 │   ├── test_escalation_store.py
-│   └── test_call_analytics_store.py
+│   ├── test_call_analytics_store.py
+│   └── test_handoff.py
 ├── .env.example
 ├── pyproject.toml
 ├── Dockerfile

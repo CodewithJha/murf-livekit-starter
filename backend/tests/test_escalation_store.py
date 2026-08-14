@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from agent import Assistant
+from agent import Assistant, ReturnsRefundsAgent
 from catalogue import CatalogueStore
 from escalation_store import EscalationStore, sanitize_summary_text
 from memory_store import MemoryStore
@@ -22,9 +22,7 @@ class _FakeRunContext:
 
 
 def test_sanitize_strips_otp_and_card_patterns() -> None:
-    raw = (
-        "Customer says OTP is 482910 and card 4111 1111 1111 1111 was charged twice"
-    )
+    raw = "Customer says OTP is 482910 and card 4111 1111 1111 1111 was charged twice"
     cleaned = sanitize_summary_text(raw)
     assert "482910" not in cleaned
     assert "4111" not in cleaned
@@ -112,7 +110,7 @@ async def test_create_escalation_tool_requires_consent(tmp_path) -> None:
         db_path=tmp_path / "dukaan_dost.db",
         jsonl_path=tmp_path / "escalations.jsonl",
     )
-    agent = Assistant(escalation_store=store)
+    agent = ReturnsRefundsAgent(escalation_store=store)
     ctx = _FakeRunContext()
 
     result = await agent.create_escalation(
@@ -137,7 +135,7 @@ async def test_create_escalation_tool_writes_after_consent(tmp_path) -> None:
         db_path=tmp_path / "dukaan_dost.db",
         jsonl_path=tmp_path / "escalations.jsonl",
     )
-    agent = Assistant(escalation_store=store)
+    agent = ReturnsRefundsAgent(escalation_store=store)
     ctx = _FakeRunContext()
 
     result = await agent.create_escalation(
@@ -169,8 +167,11 @@ def test_normal_order_path_does_not_auto_create_escalation(tmp_path) -> None:
         catalogue_store=CatalogueStore(),
         escalation_store=store,
     )
+    specialist = ReturnsRefundsAgent(escalation_store=store)
 
     assert agent._escalations.list_open() == []
     assert hasattr(agent, "lookup_kirana_item")
-    assert hasattr(agent, "create_escalation")
+    assert hasattr(agent, "transfer_to_returns")
+    assert not hasattr(agent, "create_escalation")
+    assert hasattr(specialist, "create_escalation")
     assert agent._escalations.list_open() == []

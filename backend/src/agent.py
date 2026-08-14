@@ -63,7 +63,7 @@ Example Hindi replies (only when customer spoke Hindi/Hinglish) — Devanagari o
 Never reply with empty filler like only "Haan ji", "Okay ji", "Theek hai", "हाँ जी" without naming the item and quantity.
 
 MEMORY — use tools, never invent saved history
-Tools: lookup_caller, save_caller_memory, lookup_kirana_item, create_escalation, note_order_line.
+Tools: lookup_caller, save_caller_memory, lookup_kirana_item, note_order_line, transfer_to_returns.
 - After you greet (or as soon as the caller shares their name), call lookup_caller with their name.
 - If a profile is found: greet/welcome them by name, briefly continue from last time using their facts (past orders, usual quantities, preferred delivery slot), then take today's order.
 - If not found: treat them as a new customer, ask their name if still unknown, then take the order.
@@ -85,21 +85,14 @@ ORDER NOTE — note_order_line
 - Do not call it for greetings, small talk, or catalogue-only questions with no order line.
 - Never mention analytics, dashboards, or call scoring to the caller.
 
-HUMAN HELP — create_escalation (only two cases)
-Use create_escalation ONLY when the caller needs a human shopkeeper for:
-1. payment_refund_dispute — charged wrong, wants refund, UPI/payment issue, double charge.
-2. order_dispute — wrong/missing items, damaged goods, delivery complaint about a past order.
+RETURNS HANDOFF — transfer_to_returns
+Hand off to the returns specialist when the caller needs help with:
+1. Payment / refund dispute — charged wrong, wants refund, UPI/payment issue, double charge.
+2. Past order dispute — wrong/missing items, damaged goods, delivery complaint about a past order.
 
-Do NOT escalate for normal order-taking ("two litres milk", price checks, new orders).
-Before calling create_escalation:
-- Explain briefly what you will share with the shopkeeper (name, issue summary, what you already checked).
-- Ask clear permission: "Shall I pass this to the shopkeeper for follow-up?"
-- Call create_escalation only after a clear yes. Set caller_consented=true only then.
-- If they refuse, do not create. You may call with caller_consented=false or skip.
-After a successful create:
-- Give the reference ID (ESC-…) clearly.
-- Say the shopkeeper will review and follow up. Do NOT promise an instant callback or refund.
-- Do not take OTPs, PINs, card numbers, or full payment details — ever.
+Before calling transfer_to_returns, say briefly that you will connect them to the returns specialist.
+Call transfer_to_returns for those cases — do not try to resolve refunds yourself and do not create shopkeeper tickets yourself.
+Do NOT hand off for normal order-taking ("two litres milk"), price checks, or new grocery orders.
 
 KNOWLEDGE
 Common kirana items: milk/दूध, atta/आटा, rice/चावल, oil/तेल, sugar/चीनी, tea/चाय, biscuits, eggs/अंडे, onions/प्याज, tomatoes/टमाटर, potatoes/आलू, and similar.
@@ -135,6 +128,34 @@ Greet immediately as Dukaan Dost without waiting on tools.
 - New caller (Hindi): "नमस्ते, मैं दूकान दोस्त हूँ। आपका नाम बताइए और क्या ऑर्डर करना है?"
 As soon as you hear a name (or anytime you need saved facts), call lookup_caller with that name.
 If a profile is found after lookup: welcome them by name, mention one saved fact, then continue the order.
+"""
+
+RETURNS_PROMPT = """
+IDENTITY
+You are the returns and refunds specialist for a small Indian kirana shop.
+You are not Dukaan Dost. You handle payment, refund, and past-order disputes only.
+
+OBJECTIVES
+1. Continue from what the caller already said — do not make them repeat the full story.
+2. Ask one short clarifying question if needed (what went wrong, approx when, preferred follow-up).
+3. Never take OTPs, PINs, card numbers, or full payment details.
+4. Never promise an instant refund or instant callback.
+5. When the shopkeeper must review: explain what you will share, ask permission, then call create_escalation only after a clear yes.
+6. After a successful create_escalation: speak the ESC- reference ID and say the shopkeeper will follow up.
+7. If the caller wants a NEW grocery order (milk, atta, onion, etc.), call transfer_to_dukaan_dost.
+
+Tools: create_escalation, transfer_to_dukaan_dost.
+
+create_escalation reasons:
+- payment_refund_dispute — charged wrong, refund, UPI/payment issue, double charge.
+- order_dispute — wrong/missing/damaged past order or delivery complaint.
+
+LANGUAGE & SCRIPT
+- Hindi → Devanagari only. English → Latin script.
+- Match the caller's latest turn (English vs Hindi/Hinglish).
+
+STYLE
+Spoken aloud. One or two short sentences. No bullets, markdown, or emojis.
 """
 
 # Grocery keyterms boost Deepgram Nova-3 recognition (English + common romanized Hindi).
@@ -355,6 +376,151 @@ async def finalize_browser_call(
     return record.to_dict()
 
 
+def _apply_reply_locale(session: AgentSession, turn_ctx: ChatContext, text: str) -> str:
+    """Update session TTS locale and add a language system hint for this turn."""
+    locale = _reply_locale_for_text(text)
+    userdata = _session_userdata(session)
+    userdata["language"] = locale
+    userdata["user_turn_count"] = int(userdata.get("user_turn_count") or 0) + 1
+
+    tts = getattr(session, "tts", None)
+    if tts is not None and hasattr(tts, "update_options"):
+        tts.update_options(locale=locale)
+        logger.info("Reply locale %s for user text: %r", locale, text[:80])
+
+    if locale == "hi-IN":
+        turn_ctx.add_message(
+            role="system",
+            content=(
+                "Language for this reply: Hindi in Devanagari script only "
+                "(e.g. नमस्ते, दूध). Never romanize Hindi. "
+                "Keep replies short and spoken. "
+                "Do not answer with empty filler like only 'हाँ जी'."
+            ),
+        )
+    else:
+        turn_ctx.add_message(
+            role="system",
+            content=(
+                "Language for this reply: Indian English only. "
+                "Do not use Hindi words or 'ji' filler. "
+                "Keep replies short and spoken."
+            ),
+        )
+    return locale
+
+
+class ReturnsRefundsAgent(Agent):
+    """Day 9 specialist — payment / refund / past-order disputes."""
+
+    def __init__(
+        self,
+        chat_ctx: ChatContext | None = None,
+        escalation_store: EscalationStore | None = None,
+        memory_store: MemoryStore | None = None,
+        catalogue_store: CatalogueStore | None = None,
+        analytics_store: CallAnalyticsStore | None = None,
+    ) -> None:
+        super().__init__(
+            instructions=RETURNS_PROMPT,
+            chat_ctx=chat_ctx,
+            tts=murf.TTS(
+                voice="Pooja",
+                style="Conversation",
+                tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
+                text_pacing=True,
+                verbose=True,
+            ),
+        )
+        self._escalations = escalation_store or _escalation_store
+        self._memory = memory_store or _memory_store
+        self._catalogue = catalogue_store or _catalogue_store
+        self._analytics = analytics_store or _analytics_store
+
+    async def on_enter(self) -> None:
+        await self.session.generate_reply(
+            instructions=(
+                "Introduce yourself briefly as the returns and refunds specialist "
+                "for the kirana shop. Acknowledge the caller's issue from prior "
+                "context if available, and ask one short question to help. "
+                "Do not call any tools on this turn."
+            ),
+            tool_choice="none",
+        )
+
+    async def on_user_turn_completed(
+        self, turn_ctx: ChatContext, new_message: ChatMessage
+    ) -> None:
+        _apply_reply_locale(self.session, turn_ctx, new_message.text_content or "")
+
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    async def create_escalation(
+        self,
+        context: RunContext,
+        reason: str,
+        what_happened: str,
+        already_checked: str,
+        urgency: str,
+        preferred_followup: str,
+        caller_name: str,
+        language: str,
+        caller_consented: bool,
+    ) -> dict[str, Any]:
+        """Create a shopkeeper ticket ONLY after explicit consent.
+
+        Use for payment/refund disputes or past order disputes. Ask permission
+        first and explain what will be shared.
+
+        Args:
+            reason: payment_refund_dispute or order_dispute.
+            what_happened: Short 1-2 sentence summary (no OTP/PIN/card details).
+            already_checked: What you already clarified with the caller.
+            urgency: low, medium, or high (default medium).
+            preferred_followup: How they want follow-up (call back, WhatsApp, in-shop).
+            caller_name: Caller's name.
+            language: en-IN or hi-IN.
+            caller_consented: True only after the caller explicitly agreed to escalate.
+        """
+        logger.info(
+            "returns create_escalation: reason=%r consented=%s caller=%r",
+            reason,
+            caller_consented,
+            caller_name,
+        )
+        result = self._escalations.create(
+            reason=reason,
+            what_happened=what_happened,
+            already_checked=already_checked,
+            urgency=urgency or "medium",
+            preferred_followup=preferred_followup or "",
+            caller_name=caller_name,
+            language=language or "en-IN",
+            caller_consented=caller_consented,
+        )
+        if result.get("created"):
+            mark_escalation_created(context)
+        return result
+
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    async def transfer_to_dukaan_dost(self, context: RunContext) -> tuple[Agent, str]:
+        """Hand the caller back to Dukaan Dost for a new grocery order.
+
+        Use when the returns issue is done or the caller wants to order milk,
+        atta, onion, or other kirana items.
+        """
+        _ = context
+        logger.info("handoff: returns -> dukaan dost")
+        agent = Assistant(
+            chat_ctx=self.chat_ctx.copy(exclude_instructions=True),
+            memory_store=self._memory,
+            catalogue_store=self._catalogue,
+            escalation_store=self._escalations,
+            analytics_store=self._analytics,
+            resuming=True,
+        )
+        return agent, "Taking you back to Dukaan Dost for your order."
+
+
 class Assistant(Agent):
     def __init__(
         self,
@@ -362,17 +528,31 @@ class Assistant(Agent):
         catalogue_store: CatalogueStore | None = None,
         escalation_store: EscalationStore | None = None,
         analytics_store: CallAnalyticsStore | None = None,
+        chat_ctx: ChatContext | None = None,
+        resuming: bool = False,
     ) -> None:
-        super().__init__(instructions=SYSTEM_PROMPT)
+        super().__init__(instructions=SYSTEM_PROMPT, chat_ctx=chat_ctx)
         self._memory = memory_store or _memory_store
         self._catalogue = catalogue_store or _catalogue_store
         self._escalations = escalation_store or _escalation_store
         self._analytics = analytics_store or _analytics_store
+        self._resuming = resuming
 
     async def on_enter(self) -> None:
         # Gemini rejects tool-call→reply on enter ("function call turn must follow
         # user/function-response"). Greet without tools; lookup runs after the
         # caller shares their name (still via function tools).
+        if self._resuming:
+            await self.session.generate_reply(
+                instructions=(
+                    "You just resumed after the returns specialist. Briefly "
+                    "confirm you are Dukaan Dost again and ask what they would "
+                    "like to order. Do not call any tools on this turn."
+                ),
+                tool_choice="none",
+            )
+            return
+
         await self.session.generate_reply(
             instructions=(
                 "Greet as Dukaan Dost for the kirana shop in one short spoken "
@@ -393,37 +573,18 @@ class Assistant(Agent):
         self, turn_ctx: ChatContext, new_message: ChatMessage
     ) -> None:
         text = new_message.text_content or ""
-        locale = _reply_locale_for_text(text)
-
-        userdata = _session_userdata(self.session)
-        userdata["language"] = locale
-        userdata["user_turn_count"] = int(userdata.get("user_turn_count") or 0) + 1
-
-        tts = getattr(self.session, "tts", None)
-        if tts is not None and hasattr(tts, "update_options"):
-            # Always set locale both ways so Hindi does not stick after English turns.
-            tts.update_options(locale=locale)
-            logger.info("Reply locale %s for user text: %r", locale, text[:80])
-
-        # Prefer instruction hints over extra system turns — Gemini is strict about
-        # turn order when tools are in the chat history.
+        locale = _apply_reply_locale(self.session, turn_ctx, text)
         if locale == "hi-IN":
+            # Extra order-taking hint on top of shared locale note.
             turn_ctx.add_message(
                 role="system",
-                content=(
-                    "Language for this reply: Hindi in Devanagari script only "
-                    "(e.g. नमस्ते, दूध). Never romanize Hindi. "
-                    "Confirm item name + quantity. "
-                    "Do not answer with empty filler like only 'हाँ जी'."
-                ),
+                content="Confirm item name + quantity when acknowledging an order line.",
             )
         else:
             turn_ctx.add_message(
                 role="system",
                 content=(
-                    "Language for this reply: Indian English only. "
                     "Confirm item name + quantity in English. "
-                    "Do not use Hindi words or 'ji' filler. "
                     "Example: 'Got it — two litres of milk. Anything else?'"
                 ),
             )
@@ -559,52 +720,26 @@ class Assistant(Agent):
         return result
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
-    async def create_escalation(
-        self,
-        context: RunContext,
-        reason: str,
-        what_happened: str,
-        already_checked: str,
-        urgency: str,
-        preferred_followup: str,
-        caller_name: str,
-        language: str,
-        caller_consented: bool,
-    ) -> dict[str, Any]:
-        """Create a human-help request for the shopkeeper ONLY after explicit consent.
+    async def transfer_to_returns(self, context: RunContext) -> tuple[Agent, str]:
+        """Hand off to the returns specialist for payment, refund, or past-order disputes.
 
-        Use only for payment/refund disputes or order disputes — not for normal
-        grocery ordering. Ask permission first and explain what will be shared.
+        Use for double charge, UPI/payment issues, refunds, wrong/missing/damaged
+        past orders, or delivery complaints about a past order. Do not use for
+        normal new grocery orders.
 
         Args:
-            reason: payment_refund_dispute or order_dispute.
-            what_happened: Short 1-2 sentence summary (no OTP/PIN/card details).
-            already_checked: What you already tried (catalogue lookup, order note, etc.).
-            urgency: low, medium, or high (default medium).
-            preferred_followup: How they want follow-up (call back, WhatsApp, in-shop).
-            caller_name: Caller's name.
-            language: en-IN or hi-IN.
-            caller_consented: True only after the caller explicitly agreed to escalate.
+            context: LiveKit run context (unused; required by the tool signature).
         """
-        logger.info(
-            "create_escalation: reason=%r consented=%s caller=%r",
-            reason,
-            caller_consented,
-            caller_name,
+        _ = context
+        logger.info("handoff: dukaan dost -> returns")
+        specialist = ReturnsRefundsAgent(
+            chat_ctx=self.chat_ctx.copy(exclude_instructions=True),
+            escalation_store=self._escalations,
+            memory_store=self._memory,
+            catalogue_store=self._catalogue,
+            analytics_store=self._analytics,
         )
-        result = self._escalations.create(
-            reason=reason,
-            what_happened=what_happened,
-            already_checked=already_checked,
-            urgency=urgency or "medium",
-            preferred_followup=preferred_followup or "",
-            caller_name=caller_name,
-            language=language or "en-IN",
-            caller_consented=caller_consented,
-        )
-        if result.get("created"):
-            mark_escalation_created(context)
-        return result
+        return specialist, "Connecting you to our returns specialist."
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def note_order_line(
